@@ -1,0 +1,28 @@
+PRIYA "POOJA" DESAI
+Data Engineer
+Email: pd9221789@gmail.com | Phone: +91 99001 23456
+Location: Bengaluru, India | LinkedIn: linkedin.com/in/poojadesai-data
+
+PROFESSIONAL SUMMARY
+Data engineer with 5 years of experience building Python data pipelines on GCP.
+Strong SQL and distributed processing; growing backend microservices exposure.
+
+SKILLS
+Languages: Python, SQL, Scala
+Cloud: Google Cloud Platform (BigQuery, Pub/Sub, Cloud Run, Dataflow)
+Infrastructure: Docker, Kubernetes, Terraform, Airflow
+Data: PostgreSQL, BigQuery, Redis
+APIs: REST
+Other: Microservices, Distributed Systems, Kafka, ETL
+
+EXPERIENCE
+Data Engineer, InsightStream (2020 - Present)
+- Built Python + Dataflow pipelines processing 4TB/day into BigQuery.
+- Deployed batch and streaming jobs on GCP Cloud Run and GKE.
+- Authored Terraform for data infra and built REST APIs for data access.
+
+Data Analyst, MetricLabs (2019 - 2020)
+- Wrote SQL transformations and built reporting dashboards.
+
+EDUCATION
+B.Tech, Computer Science - PES University (2019)

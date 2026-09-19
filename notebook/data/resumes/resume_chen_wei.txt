@@ -1,0 +1,31 @@
+CHEN WEI
+Cloud / Platform Engineer
+chen.wei@example.com | +65 8123 4567 | Singapore
+linkedin.com/in/chenwei-cloud
+
+PROFILE
+Platform engineer with 6 years of experience operating large-scale cloud
+infrastructure for fintech companies. Strong in Python, Kubernetes, and GCP.
+
+CORE COMPETENCIES
+Cloud: GCP (Cloud Run, GKE, Pub/Sub, BigQuery), Terraform
+Containers: Docker, Kubernetes (CKA certified)
+Languages: Python, Go, Bash
+Data: PostgreSQL, Redis
+Messaging: Pub/Sub, Kafka
+Practices: Microservices, Distributed Systems, CI/CD, Observability (Prometheus, Grafana)
+
+EXPERIENCE
+Platform Engineer, FinNode (2019 - Present)
+- Operate Kubernetes (GKE) clusters running 120+ payment microservices.
+- Authored Terraform modules for multi-region GCP infrastructure.
+- Built Python tooling and gRPC internal services for deployment automation.
+
+DevOps Engineer, CloudStack Asia (2018 - 2019)
+- Managed CI/CD pipelines and Docker-based deployments.
+
+EDUCATION
+B.Sc., Computer Engineering - National University of Singapore (2018)
+
+CERTIFICATIONS
+Certified Kubernetes Administrator (CKA), Google Professional Cloud Architect

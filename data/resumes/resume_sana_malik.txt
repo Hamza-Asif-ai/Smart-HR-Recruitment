@@ -1,0 +1,26 @@
+Sana Malik
+QA / Test Automation Engineer
+kdramaworld023@gmail.com | +92 312 6677889 | Lahore, Pakistan
+
+OBJECTIVE
+QA engineer with 3 years of experience in manual and automated testing of web
+applications. Seeking to broaden into backend and reliability engineering.
+
+SKILLS
+- Languages: Python (pytest), JavaScript
+- Automation: Selenium, Playwright, Cypress
+- API Testing: Postman, REST
+- CI: GitHub Actions, Jenkins
+- Other: Test plans, bug tracking (Jira), basic SQL
+
+EXPERIENCE
+QA Engineer, TestLabs (2021 - Present)
+- Built Playwright and pytest automation suites covering 400+ test cases.
+- Set up CI test runs in GitHub Actions and triaged production defects.
+- Wrote REST API tests in Postman against backend services.
+
+Junior QA Analyst, AppCheck (2020 - 2021)
+- Executed manual test cases and logged defects in Jira.
+
+EDUCATION
+B.S., Computer Science - University of Central Punjab (2020)

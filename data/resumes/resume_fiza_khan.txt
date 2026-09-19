@@ -1,0 +1,29 @@
+Fiza Khan
+Machine Learning Engineer
+fiza46381@gmail.com | +92 300 2233445 | Lahore, Pakistan
+github.com/fizakhan-ml
+
+PROFILE
+Machine learning engineer with 5 years of experience shipping ML services in
+Python. Strong Python and SQL, with backend API and cloud deployment skills on GCP.
+
+CORE COMPETENCIES
+Languages: Python, SQL
+ML: scikit-learn, PyTorch, TensorFlow, pandas, numpy
+Backend: FastAPI, Flask, REST APIs
+Cloud: GCP (Vertex AI, Cloud Run, BigQuery), AWS SageMaker
+Infrastructure: Docker, Kubernetes (basic), CI/CD
+Data: PostgreSQL, BigQuery, Redis
+
+EXPERIENCE
+Machine Learning Engineer, PredictlyAI (2020 - Present)
+- Built and served fraud-detection models behind FastAPI services on GCP Cloud Run.
+- Designed feature pipelines into BigQuery and exposed REST inference APIs.
+- Containerized model services with Docker for deployment.
+
+Data Scientist, InsightForge (2019 - 2020)
+- Developed forecasting models and analysis notebooks in Python.
+
+EDUCATION
+M.S., Data Science - LUMS (2019)
+B.S., Computer Science - PUCIT (2017)

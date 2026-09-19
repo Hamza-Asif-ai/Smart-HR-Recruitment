@@ -1,0 +1,31 @@
+Anas Siddiqui
+DevOps / Cloud Engineer
+anasammar164@gmail.com | +92 345 1122334 | Hyderabad, India
+
+SUMMARY
+Cloud engineer with 5 years of experience operating containerized
+infrastructure for fintech workloads. Strong in Kubernetes, Terraform, and
+CI/CD, with Python scripting for automation.
+
+SKILLS
+Cloud: GCP (GKE, Cloud Run, Pub/Sub), AWS (EKS, S3)
+Containers: Docker, Kubernetes
+IaC: Terraform, Helm
+Languages: Python, Bash, Go
+Data: PostgreSQL, Redis
+Practices: CI/CD, Observability (Prometheus, Grafana), Microservices
+
+EXPERIENCE
+DevOps Engineer, FinScale (2020 - Present)
+- Operate GKE clusters running 80+ payment microservices.
+- Authored Terraform modules and Helm charts for multi-environment deploys.
+- Built Python automation tooling for release and rollback workflows.
+
+Cloud Support Engineer, HostBridge (2019 - 2020)
+- Managed Docker-based deployments and CI/CD pipelines.
+
+EDUCATION
+B.Tech, Information Technology - Osmania University (2019)
+
+CERTIFICATIONS
+Certified Kubernetes Administrator (CKA)

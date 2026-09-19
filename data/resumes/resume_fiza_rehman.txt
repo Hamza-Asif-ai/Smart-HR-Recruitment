@@ -1,0 +1,25 @@
+Fiza Rehman
+Junior Software Developer (Fresh Graduate)
+fizagraduation@gmail.com | +92 345 9911223 | Faisalabad, Pakistan
+
+OBJECTIVE
+Recent computer science graduate seeking a junior backend role. Strong
+fundamentals in Python and databases through coursework and internships.
+
+SKILLS
+- Languages: Python, C++, SQL
+- Frameworks: Flask, basic Django
+- Tools: Git, Docker (basic)
+- Databases: MySQL, SQLite
+- Concepts: Data Structures, OOP, REST APIs (basic)
+
+PROJECTS & EXPERIENCE
+Final Year Project - Campus Marketplace (2024 - 2025)
+- Built a Flask REST API with a MySQL backend for a student marketplace.
+- Containerized the app with Docker for the demo.
+
+Software Intern, ByteCraft (Summer 2024)
+- Assisted in building Python scripts and fixing minor backend bugs.
+
+EDUCATION
+B.S., Computer Science - GC University Faisalabad (2025)

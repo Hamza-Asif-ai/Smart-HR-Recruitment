@@ -1,0 +1,27 @@
+Hamza Asif
+Full Stack Developer
+boy17502@gmail.com | (+91) 90123 45678 | Pune, India
+
+SUMMARY
+Full stack developer with 4 years of experience delivering web applications.
+Comfortable across the stack with a focus on Node.js and React, growing
+backend depth in Python.
+
+TECHNICAL SKILLS
+- Languages: JavaScript, TypeScript, Python
+- Backend: Node.js, Express, REST APIs, some FastAPI
+- Frontend: React, Redux, HTML, CSS
+- Databases: MongoDB, PostgreSQL
+- DevOps: Docker, basic AWS (EC2, S3)
+
+WORK EXPERIENCE
+Full Stack Developer, BrightApps (2021 - Present)
+- Built customer-facing React dashboards backed by Node.js REST APIs.
+- Containerized services with Docker and deployed to AWS EC2.
+- Wrote Python scripts for data migration tasks.
+
+Junior Developer, WebForge (2020 - 2021)
+- Maintained Express.js APIs and MongoDB collections.
+
+EDUCATION
+B.E., Information Technology - Pune University (2020)

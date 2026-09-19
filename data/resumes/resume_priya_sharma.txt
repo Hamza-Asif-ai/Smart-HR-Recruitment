@@ -1,0 +1,30 @@
+PRIYA SHARMA
+Senior Software Engineer
+Email: priya.sharma@example.com | Phone: +91 98765 43210
+Location: Bengaluru, India | LinkedIn: linkedin.com/in/priyasharma-dev
+
+PROFESSIONAL SUMMARY
+Backend engineer with 7 years of experience building scalable, cloud-native
+payment and commerce platforms. Specialized in Python microservices on GCP.
+
+SKILLS
+Languages: Python, Go, SQL
+Cloud: Google Cloud Platform (Cloud Run, Pub/Sub, BigQuery), AWS
+Infrastructure: Docker, Kubernetes, Terraform, CI/CD (GitHub Actions)
+Data: PostgreSQL, Redis, BigQuery
+APIs: REST, gRPC, Protocol Buffers
+Other: Microservices, Distributed Systems, Kafka
+
+EXPERIENCE
+Senior Backend Engineer, PayStream Inc. (2020 - Present)
+- Led design of a payments ledger service handling 4M+ transactions/day.
+- Migrated monolith to microservices on GCP Cloud Run, cutting latency 40%.
+- Built gRPC APIs and mentored 4 junior engineers.
+
+Backend Engineer, ShopGrid (2017 - 2020)
+- Developed REST APIs in Python (FastAPI) and PostgreSQL data models.
+- Implemented Kafka-based event pipelines.
+
+EDUCATION
+M.Tech, Computer Science - IIT Bombay (2017)
+B.Tech, Computer Science - NIT Trichy (2015)

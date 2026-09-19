@@ -1,0 +1,41 @@
+Job Title: Senior Backend Engineer (Python / Cloud)
+Company: NimbusPay Technologies
+Location: Bengaluru, India (Hybrid)
+Department: Platform Engineering
+
+About the Role:
+We are looking for a Senior Backend Engineer to design and scale the payment
+processing services that power millions of daily transactions. You will own
+critical microservices end-to-end, mentor mid-level engineers, and drive
+engineering best practices across the team.
+
+Responsibilities:
+- Design, build, and maintain high-throughput backend microservices in Python.
+- Architect cloud-native systems on GCP (Cloud Run, Pub/Sub, BigQuery).
+- Build and optimize RESTful and gRPC APIs.
+- Design relational and NoSQL data models (PostgreSQL, Redis).
+- Implement CI/CD pipelines and infrastructure-as-code (Docker, Kubernetes, Terraform).
+- Ensure observability, reliability, and security of production systems.
+- Mentor junior engineers and lead code reviews.
+
+Required Skills:
+- Strong proficiency in Python.
+- Experience with at least one cloud platform (GCP preferred, AWS/Azure acceptable).
+- Solid understanding of microservices architecture and distributed systems.
+- Hands-on experience with Docker and Kubernetes.
+- Strong SQL skills and experience with PostgreSQL.
+- Experience designing and consuming REST APIs.
+- Familiarity with message queues (Pub/Sub, Kafka, or RabbitMQ).
+
+Nice to Have:
+- Experience with Terraform or other IaC tools.
+- Exposure to the fintech / payments domain.
+- Experience with gRPC and Protocol Buffers.
+- Knowledge of Go or Java.
+
+Qualifications:
+- Bachelor's or Master's degree in Computer Science or a related field.
+- 5+ years of professional backend software engineering experience.
+
+Employment Type: Full-time
+Experience Level: Senior (5-8 years)

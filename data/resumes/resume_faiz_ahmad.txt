@@ -1,0 +1,31 @@
+FAIZ AHMAD
+Senior Backend Engineer
+Email: f43453575@gmail.com | Phone: +91 98220 33445
+Location: Bengaluru, India | LinkedIn: linkedin.com/in/faizahmad-dev
+
+PROFESSIONAL SUMMARY
+Senior backend engineer with 8 years of experience building high-throughput
+Python microservices on Kubernetes and GCP. Deep expertise in distributed
+systems, gRPC, and observability for payments-scale workloads.
+
+SKILLS
+Languages: Python, Go, SQL
+Cloud: Google Cloud Platform (GKE, Cloud Run, Pub/Sub, BigQuery), AWS
+Infrastructure: Docker, Kubernetes, Terraform, Helm, CI/CD (GitHub Actions)
+Data: PostgreSQL, Redis, BigQuery
+APIs: REST, gRPC, Protocol Buffers
+Other: Microservices, Distributed Systems, Kafka, Prometheus, Grafana
+
+EXPERIENCE
+Senior Backend Engineer, PayMatrix (2019 - Present)
+- Own 30+ payment microservices on GKE processing 8M+ transactions/day.
+- Designed gRPC + REST APIs and PostgreSQL data models for the core ledger.
+- Built Terraform/Helm infrastructure and Prometheus/Grafana observability.
+- Mentored 5 engineers and led architecture and code reviews.
+
+Backend Engineer, TransactIO (2016 - 2019)
+- Developed Python (FastAPI) services and Kafka event pipelines.
+
+EDUCATION
+M.Tech, Computer Science - IIT Madras (2016)
+B.E., Computer Science - Anna University (2014)

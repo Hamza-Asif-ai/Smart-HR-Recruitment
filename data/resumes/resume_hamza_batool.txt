@@ -1,0 +1,30 @@
+Hamza Batool
+Backend Engineer
+hamzabatool1@gmail.com | +91 98111 22333 | Delhi, India
+github.com/hamzabatool
+
+SUMMARY
+Backend engineer with 5 years of experience building services in Java and
+Python. Comfortable with microservices and SQL, expanding cloud and Kubernetes
+skills.
+
+SKILLS
+Languages: Java, Python, SQL
+Frameworks: Spring Boot, FastAPI
+Cloud: AWS (EC2, RDS), some GCP
+Infrastructure: Docker, Kubernetes, Jenkins CI/CD
+Data: PostgreSQL, MySQL, Redis
+Messaging: RabbitMQ, Kafka
+Architecture: Microservices, REST APIs
+
+EXPERIENCE
+Backend Engineer, CoreBank Systems (2020 - Present)
+- Built Spring Boot and FastAPI microservices for banking workflows.
+- Designed PostgreSQL schemas and integrated Kafka event streams.
+- Containerized services with Docker, deployed on Kubernetes.
+
+Software Engineer, FinTechLabs (2019 - 2020)
+- Developed REST APIs and maintained MySQL databases.
+
+EDUCATION
+B.Tech, Computer Science - Delhi Technological University (2019)

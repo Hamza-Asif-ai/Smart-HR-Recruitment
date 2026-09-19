@@ -1,0 +1,14 @@
+# Core: Google Agent Development Kit + Gemini
+google-adk>=0.2.0
+google-genai>=0.3.0
+
+# MCP server (filesystem tools exposed to agents)
+mcp>=1.2.0
+
+# Data handling, parsing, visualization (used in the notebook)
+pandas>=2.0.0
+matplotlib>=3.7.0
+pypdf>=4.0.0          # optional: parse PDF resumes
+
+# Web UI (app.py) - for local demo and Hugging Face Spaces deployment
+gradio>=4.0.0

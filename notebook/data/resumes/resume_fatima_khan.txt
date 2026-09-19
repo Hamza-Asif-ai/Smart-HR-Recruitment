@@ -1,0 +1,24 @@
+Fatima Khan
+Data Analyst
+fatima.khan@example.com | +91 99887 76655 | Hyderabad, India
+
+OBJECTIVE
+Detail-oriented data analyst with 3 years of experience turning data into
+business insight. Seeking to grow into data engineering.
+
+SKILLS
+- Languages: Python (pandas, numpy), SQL
+- BI / Viz: Tableau, Power BI, matplotlib
+- Databases: PostgreSQL, MySQL
+- Other: Excel, basic ETL, statistics
+
+EXPERIENCE
+Data Analyst, RetailIQ (2021 - Present)
+- Built SQL queries and dashboards tracking sales KPIs across 200 stores.
+- Automated weekly reporting with Python and pandas.
+
+Junior Analyst, MarketLens (2020 - 2021)
+- Cleaned and analyzed survey datasets; produced Tableau dashboards.
+
+EDUCATION
+B.Sc., Statistics - University of Hyderabad (2020)

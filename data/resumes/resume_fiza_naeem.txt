@@ -1,0 +1,25 @@
+FIZA NAEEM
+UI/UX Designer & Frontend Developer
+Email: fizapic696@gmail.com | Phone: +92 321 4455667
+Location: Karachi, Pakistan | Portfolio: fizanaeem.design
+
+OBJECTIVE
+Product designer with 4 years of experience crafting user interfaces and design
+systems, with hands-on frontend implementation in React.
+
+SKILLS
+- Design: Figma, Sketch, Adobe XD, Prototyping, User Research
+- Frontend: HTML, CSS, JavaScript, React (basic)
+- Other: Design Systems, Accessibility, Usability Testing
+
+EXPERIENCE
+Senior UI/UX Designer, CanvasLab (2021 - Present)
+- Designed end-to-end flows for a fintech mobile app used by 200k users.
+- Built and maintained a Figma design system adopted across 5 teams.
+- Collaborated with engineers, contributing React component styling.
+
+UI Designer, PixelPoint (2020 - 2021)
+- Produced wireframes, mockups, and clickable prototypes.
+
+EDUCATION
+B.Design, Communication Design - Indus Valley School of Art (2020)

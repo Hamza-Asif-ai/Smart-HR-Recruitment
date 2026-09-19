@@ -1,0 +1,31 @@
+Hassan Asif
+Senior Backend Engineer
+hasif78693@gmail.com | +92 300 1234567 | Lahore, Pakistan
+github.com/hassanasif-dev
+
+SUMMARY
+Senior backend engineer with 6 years of experience designing high-throughput
+payment microservices in Python on GCP. Strong API design, distributed systems,
+and mentoring background.
+
+SKILLS
+Languages: Python, Go, SQL
+Cloud: Google Cloud Platform (Cloud Run, Pub/Sub, BigQuery), AWS
+Infrastructure: Docker, Kubernetes, Terraform, GitHub Actions CI/CD
+Data: PostgreSQL, Redis, BigQuery
+APIs: REST, gRPC, Protocol Buffers
+Architecture: Microservices, Distributed Systems, Event-driven (Kafka, Pub/Sub)
+
+EXPERIENCE
+Senior Backend Engineer, PayFlux (2020 - Present)
+- Architected payment processing microservices on GCP Cloud Run handling 5M+ transactions/day.
+- Built gRPC and REST APIs and designed PostgreSQL data models for the ledger.
+- Authored Terraform modules for multi-region infrastructure; led CI/CD on GitHub Actions.
+- Mentored 3 mid-level engineers and led code reviews.
+
+Backend Engineer, CommerceCloud (2018 - 2020)
+- Developed Python (FastAPI) services and Kafka event pipelines.
+- Containerized services with Docker, deployed to Kubernetes (GKE).
+
+EDUCATION
+B.Sc., Computer Science - University of the Punjab (2018)

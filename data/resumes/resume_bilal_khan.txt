@@ -1,0 +1,26 @@
+Bilal Khan
+Full Stack Developer
+boy617502@gmail.com | (+91) 90876 54321 | Pune, India
+
+SUMMARY
+Full stack developer with 4 years of experience delivering web applications.
+Strong on Node.js and React with growing backend depth in Python and Docker.
+
+TECHNICAL SKILLS
+- Languages: JavaScript, TypeScript, Python
+- Backend: Node.js, Express, REST APIs, some FastAPI
+- Frontend: React, Redux, HTML, CSS
+- Databases: MongoDB, PostgreSQL
+- DevOps: Docker, basic AWS (EC2, S3), GitHub Actions
+
+WORK EXPERIENCE
+Full Stack Developer, NovaApps (2021 - Present)
+- Built React dashboards backed by Node.js and FastAPI REST APIs.
+- Containerized services with Docker and deployed to AWS EC2.
+- Designed PostgreSQL schemas for reporting features.
+
+Junior Developer, CodeForge (2020 - 2021)
+- Maintained Express.js APIs and MongoDB collections.
+
+EDUCATION
+B.E., Information Technology - Pune University (2020)

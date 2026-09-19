@@ -1,0 +1,30 @@
+Devin Carter
+Full Stack Engineer
+devinfullstack@gmail.com | +1 (415) 555-0147 | Austin, TX, USA
+github.com/devincarter
+
+SUMMARY
+Full stack engineer with 6 years of experience, with the last 3 focused on
+Python backend microservices. Comfortable across React frontends and
+cloud-native services on GCP.
+
+SKILLS
+Languages: Python, JavaScript, TypeScript, SQL
+Backend: FastAPI, Django, REST APIs, gRPC (basic)
+Frontend: React, Next.js, Redux
+Cloud: GCP (Cloud Run, Pub/Sub), AWS
+Infrastructure: Docker, Kubernetes, Terraform, GitHub Actions CI/CD
+Data: PostgreSQL, Redis
+
+EXPERIENCE
+Full Stack Engineer, NimbusWorks (2020 - Present)
+- Built FastAPI microservices on GCP Cloud Run powering a payments dashboard.
+- Designed PostgreSQL schemas and Pub/Sub event flows.
+- Owned the React frontend and containerized services with Docker on GKE.
+- Set up Terraform and GitHub Actions CI/CD.
+
+Software Developer, GridApps (2017 - 2020)
+- Built Django + React features and REST APIs.
+
+EDUCATION
+B.Sc., Computer Science - University of Texas at Austin (2017)

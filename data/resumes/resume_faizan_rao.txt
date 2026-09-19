@@ -1,0 +1,31 @@
+Faizan Rao
+Backend Software Engineer
+faizan89750@gmail.com | +92 333 4455667 | Islamabad, Pakistan
+github.com/faizanrao
+
+PROFILE
+Backend engineer with 5 years of experience building Python services on AWS
+for high-traffic platforms. Strong REST API and relational data modeling skills,
+growing GCP and Kubernetes depth.
+
+CORE COMPETENCIES
+Languages: Python, SQL, Bash
+Frameworks: FastAPI, Django, Flask
+Cloud: AWS (Lambda, ECS, RDS), some GCP
+Infrastructure: Docker, Kubernetes, GitHub Actions CI/CD
+Data: PostgreSQL, Redis, DynamoDB
+Messaging: SQS, RabbitMQ
+Architecture: Microservices, REST APIs, Distributed Systems
+
+EXPERIENCE
+Backend Engineer, StackForge (2020 - Present)
+- Built async REST APIs in FastAPI serving 3M requests/day.
+- Containerized services with Docker, deployed on Kubernetes (EKS).
+- Modeled PostgreSQL schemas and tuned slow queries.
+- Set up CI/CD pipelines with GitHub Actions.
+
+Software Engineer, DataNest (2019 - 2020)
+- Developed Django services and integrated payment APIs.
+
+EDUCATION
+B.Sc., Computer Science - FAST NUCES (2019)

@@ -1,0 +1,30 @@
+DANIEL OKAFOR
+Backend Software Engineer
+daniel.okafor@example.com | +44 7700 900123 | London, UK
+github.com/danielokafor
+
+SUMMARY
+Backend engineer with 5 years of experience building reliable Python services
+for high-traffic platforms. Cloud-native mindset with strong API design skills.
+
+SKILLS
+Languages: Python, Java, SQL
+Frameworks: Django, FastAPI, Flask
+Cloud: AWS (Lambda, ECS, RDS), some GCP
+Infrastructure: Docker, Kubernetes, GitHub Actions CI/CD
+Data: PostgreSQL, Redis, DynamoDB
+Messaging: RabbitMQ, SQS
+Architecture: Microservices, REST APIs, Distributed Systems
+
+EXPERIENCE
+Backend Engineer, StreamlineHQ (2021 - Present)
+- Designed and built REST and async APIs in FastAPI serving 2M requests/day.
+- Containerized services with Docker, orchestrated on Kubernetes (EKS).
+- Modeled PostgreSQL schemas and tuned queries for performance.
+- Led migration of legacy jobs to RabbitMQ-based workers.
+
+Software Engineer, DataBridge (2019 - 2021)
+- Built Django services and integrated third-party payment APIs.
+
+EDUCATION
+B.Sc., Computer Science - University of Manchester (2019)

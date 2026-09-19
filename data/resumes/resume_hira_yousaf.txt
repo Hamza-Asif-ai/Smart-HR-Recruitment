@@ -1,0 +1,28 @@
+HIRA YOUSAF
+Software Engineer (Backend)
+Email: kdramaworld645@gmail.com | Phone: +92 333 5566778
+Location: Islamabad, Pakistan
+
+PROFESSIONAL SUMMARY
+Backend software engineer with 2 years of experience building Python REST
+APIs. Eager to grow into senior cloud and microservices work.
+
+SKILLS
+Languages: Python, SQL
+Frameworks: Django, Flask
+Cloud: basic AWS (EC2, S3)
+Infrastructure: Docker, Git
+Data: PostgreSQL, MySQL
+APIs: REST
+
+EXPERIENCE
+Software Engineer, AppShore (2022 - Present)
+- Built Django REST APIs and PostgreSQL data models for an HR product.
+- Containerized a service with Docker for staging deployments.
+- Wrote unit tests and participated in code reviews.
+
+Intern, AppShore (2021 - 2022)
+- Fixed bugs and added small features to internal tools.
+
+EDUCATION
+B.S., Computer Science - COMSATS University (2021)

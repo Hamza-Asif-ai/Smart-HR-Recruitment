@@ -1,0 +1,27 @@
+MEHWISH TARIQ
+Frontend Developer
+Email: dancinggirl189@gmail.com | Phone: +92 321 9876543
+Location: Karachi, Pakistan | LinkedIn: linkedin.com/in/mehwishtariq
+
+PROFESSIONAL SUMMARY
+Frontend developer with 4 years of experience building responsive, accessible
+web interfaces. Focused on React and design systems, with limited backend exposure.
+
+SKILLS
+Languages: JavaScript, TypeScript, HTML, CSS
+Frontend: React, Next.js, Redux, Tailwind CSS
+Tooling: Webpack, Vite, Jest, Figma
+Backend: basic Node.js / Express
+Other: REST API consumption, Accessibility (WCAG)
+
+EXPERIENCE
+Frontend Developer, PixelWave (2021 - Present)
+- Built a component library powering 8 product surfaces in React + TypeScript.
+- Improved Lighthouse performance scores by 35% across key pages.
+- Consumed REST APIs and handled client-side state with Redux.
+
+Junior Web Developer, BrightPixel (2019 - 2021)
+- Converted Figma designs into responsive HTML/CSS/JS pages.
+
+EDUCATION
+B.S., Software Engineering - NED University (2019)

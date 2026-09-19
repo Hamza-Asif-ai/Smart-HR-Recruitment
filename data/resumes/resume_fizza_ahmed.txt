@@ -1,0 +1,28 @@
+Fizza Ahmed
+Software Engineer
+fizzaa225@gmail.com | +92 300 9988776 | Lahore, Pakistan
+
+PROFILE
+Software engineer with 4 years of experience building Python backend services
+and REST APIs. Comfortable with PostgreSQL and Docker, learning Kubernetes and GCP.
+
+SKILLS
+Languages: Python, SQL, JavaScript
+Frameworks: FastAPI, Flask
+Cloud: AWS (EC2, S3), exploring GCP
+Infrastructure: Docker, GitHub Actions CI/CD
+Data: PostgreSQL, Redis
+APIs: REST
+Architecture: Microservices (basic), Distributed Systems (basic)
+
+EXPERIENCE
+Software Engineer, BrightStack (2021 - Present)
+- Built FastAPI REST services and PostgreSQL data models for a SaaS product.
+- Containerized services with Docker and set up GitHub Actions CI.
+- Integrated Redis caching to cut response times.
+
+Associate Engineer, WebNova (2020 - 2021)
+- Maintained Flask APIs and fixed production issues.
+
+EDUCATION
+B.S., Software Engineering - UET Lahore (2020)
