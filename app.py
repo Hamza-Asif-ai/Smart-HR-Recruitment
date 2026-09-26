@@ -24,6 +24,7 @@ import imaplib
 import email as email_lib
 import email.utils
 import smtplib
+import requests
 from collections import Counter
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -336,32 +337,48 @@ def execute_pipeline(role):
 # --------------------------------------------------------------------------- #
 # Email sending (SMTP) & replies (IMAP) — credentials come from the UI only
 # --------------------------------------------------------------------------- #
-def send_all_emails(sender_email, app_password, emails_state):
-    if not sender_email or not app_password:
-        return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
+def send_all_emails(sender_email, sender_name, brevo_api_key, emails_state):
+    """
+    Sends interview emails via the Brevo transactional email HTTP API.
+    Uses HTTPS (port 443) so it works from any host, including free-tier PaaS
+    platforms (Render, etc.) that block outbound SMTP ports 25/465/587.
+    Unlike Resend's sandbox domain, Brevo lets you verify a single sender EMAIL
+    (no domain purchase needed) and send to any recipient after that.
+    """
+    if not sender_email or not brevo_api_key:
+        return '<div class="status-line err">⚠ Please enter both the sender email and the Brevo API key.</div>'
     if not emails_state:
         return '<div class="status-line err">⚠ Run the pipeline first to generate the interview emails.</div>'
 
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "accept": "application/json",
+        "api-key": brevo_api_key,
+        "content-type": "application/json",
+    }
     lines = []
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
-            smtp.login(sender_email, app_password)
-            for e in emails_state:
-                msg = MIMEMultipart()
-                msg["From"] = sender_email
-                msg["To"] = e["to"]
-                msg["Subject"] = e["subject"]
-                msg.attach(MIMEText(e["body"], "plain"))
-                smtp.sendmail(sender_email, e["to"], msg.as_string())
+    for e in emails_state:
+        payload = {
+            "sender": {"name": sender_name or "HR Team", "email": sender_email},
+            "to": [{"email": e["to"]}],
+            "subject": e["subject"],
+            "textContent": e["body"],
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=20)
+            if resp.status_code in (200, 201):
                 lines.append(f'<div class="status-line ok">✅ Sent to {_html.escape(e["to"])}</div>')
-    except smtplib.SMTPAuthenticationError as ex:
-        return (f'<div class="status-line err">❌ Authentication failed. The App Password was rejected by Gmail.'
-                f'<br>Server response: {_html.escape(str(ex))}'
-                f'<br>Double-check: (1) you copied the 16-character App Password with no typos, '
-                f'(2) it was generated for <b>{_html.escape(sender_email)}</b> specifically, '
-                f'(3) it has not been deleted/revoked since.</div>')
-    except Exception as ex:
-        lines.append(f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>')
+            else:
+                try:
+                    detail = resp.json().get("message", resp.text)
+                except Exception:
+                    detail = resp.text
+                lines.append(
+                    f'<div class="status-line err">❌ {_html.escape(e["to"])} — '
+                    f'{resp.status_code}: {_html.escape(str(detail))}</div>'
+                )
+        except Exception as ex:
+            lines.append(f'<div class="status-line err">❌ {_html.escape(e["to"])} — {_html.escape(str(ex))}</div>')
 
     lines.append(f'<div class="status-line info">📨 {len(emails_state)} email(s) processed.</div>')
     return "".join(lines)
@@ -474,21 +491,33 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
                 skills_plot = gr.Plot(label="Top Skills in Applicant Pool")
 
         with gr.Tab("✉️  Interview Emails"):
-            with gr.Accordion("📧 Gmail credentials (used only for this session, never saved)", open=False):
+            with gr.Accordion("📧 Brevo sender details (used only for this session, never saved)", open=False):
+                gr.Markdown(
+                    "Sends via the **Brevo** transactional email API (HTTPS) — works from the deployed "
+                    "public link too, unlike raw Gmail SMTP which most free hosts block.\n\n"
+                    "1. In your Brevo dashboard, go to **Senders & IP** (under Settings) and verify "
+                    "the email address you'll send from — a confirmation link is emailed to it\n"
+                    "2. Get your key under **Transactional → Settings → API Keys → Generate a new API key**"
+                )
+                with gr.Row():
+                    sender_email_in = gr.Textbox(label="Sender email (verified in Brevo)", placeholder="you@example.com")
+                    sender_name_in = gr.Textbox(label="Sender name", placeholder="HR Team", value="HR Team")
+                brevo_key_in = gr.Textbox(label="Brevo API Key", type="password", placeholder="xkeysib-...")
+            send_btn = gr.Button("📤  Send All Interview Emails", variant="primary")
+            send_status = gr.HTML()
+            emails_out = gr.HTML()
+
+        with gr.Tab("📥  Replies"):
+            gr.Markdown("Checks a Gmail inbox for replies **from the shortlisted candidates** you emailed.")
+            with gr.Accordion("📧 Gmail credentials for checking replies (never saved)", open=False):
                 gr.Markdown(
                     "Needs a **Gmail App Password** (not your normal password) — "
                     "generate one at `myaccount.google.com/apppasswords` "
                     "(requires 2-Step Verification to be ON)."
                 )
                 with gr.Row():
-                    sender_email_in = gr.Textbox(label="Gmail address", placeholder="you@gmail.com")
-                    app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
-            send_btn = gr.Button("📤  Send All Interview Emails", variant="primary")
-            send_status = gr.HTML()
-            emails_out = gr.HTML()
-
-        with gr.Tab("📥  Replies"):
-            gr.Markdown("Checks your Gmail inbox for replies **from the shortlisted candidates** you emailed.")
+                    reply_email_in = gr.Textbox(label="Gmail address", placeholder="you@gmail.com")
+                    reply_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
             refresh_btn = gr.Button("🔄  Check for Replies", variant="primary")
             replies_out = gr.HTML()
 
@@ -506,13 +535,13 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
 
     send_btn.click(
         fn=send_all_emails,
-        inputs=[sender_email_in, app_password_in, emails_state],
+        inputs=[sender_email_in, sender_name_in, brevo_key_in, emails_state],
         outputs=[send_status],
     )
 
     refresh_btn.click(
         fn=check_replies,
-        inputs=[sender_email_in, app_password_in, emails_state],
+        inputs=[reply_email_in, reply_app_password_in, emails_state],
         outputs=[replies_out],
     )
 

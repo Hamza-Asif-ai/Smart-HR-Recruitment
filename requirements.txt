@@ -9,6 +9,7 @@ mcp>=1.2.0
 pandas>=2.0.0
 matplotlib>=3.7.0
 pypdf>=4.0.0          # optional: parse PDF resumes
+requests>=2.31.0
 
 # Web UI (app.py) - for local demo and Hugging Face Spaces deployment
 gradio>=4.0.0
