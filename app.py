@@ -66,7 +66,7 @@ THEME = gr.themes.Soft(
 )
 
 CSS = """
-.gradio-container {max-width: 1180px !important; margin: 0 auto !important;}
+.gradio-container {max-width: 1560px !important; margin: 0 auto !important;}
 
 /* ---------- Header ---------- */
 #header-wrap {display:flex; align-items:center; justify-content:center; gap:14px;
@@ -150,9 +150,18 @@ table.cand-table tr:hover td {background:#181826;}
 .status-line.info {background:rgba(99,102,241,0.1); color:#a5b4fc;}
 
 /* ---------- Reply cards ---------- */
-.reply-card {border:1px solid #232336; border-radius:14px; padding:16px 18px; margin-bottom:12px;
+.reply-card {border:1px solid #232336; border-radius:14px; padding:16px 18px;
              background:#12121c; border-left:3px solid #4ade80;}
 .reply-date {color:#8b8ba7; font-size:0.74rem; float:right;}
+.reply-grid {display:grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+             gap:14px; align-items:start;}
+.attach-chip {display:inline-block; padding:3px 9px; border-radius:999px; font-size:0.7rem;
+              font-weight:600; background:rgba(99,102,241,0.14); color:#a5b4fc;
+              border:1px solid rgba(99,102,241,0.3); margin-left:6px;}
+.skills-row {display:flex; flex-wrap:wrap; gap:5px; max-width:260px;}
+.skill-chip {font-size:0.68rem; padding:2px 8px; border-radius:999px;
+             background:rgba(139,92,246,0.12); color:#c4b5fd; border:1px solid rgba(139,92,246,0.25);}
+.skill-chip.missing {background:rgba(244,63,94,0.08); color:#fca5a5; border-color:rgba(251,113,133,0.2);}
 
 footer {display:none !important;}
 
@@ -192,6 +201,15 @@ def render_candidate_table(ranked):
         name = _html.escape(c["name"])
         email_addr = _html.escape(c["email"])
         pct = c["match_percent"]
+
+        matched = c.get("matched_required", []) or []
+        skill_chips = "".join(f'<span class="skill-chip">{_html.escape(s)}</span>' for s in matched[:5])
+        more = len(matched) - 5
+        if more > 0:
+            skill_chips += f'<span class="skill-chip">+{more} more</span>'
+        if not matched:
+            skill_chips = '<span class="skill-chip missing">No required skills matched</span>'
+
         rows_html.append(f"""
         <tr>
           <td><span class="{rank_cls}">{c['rank']}</span></td>
@@ -202,6 +220,7 @@ def render_candidate_table(ranked):
               <div class="match-pct">{pct}%</div>
             </div>
           </td>
+          <td><div class="skills-row">{skill_chips}</div></td>
           <td><span class="chip {cls}">{label}</span></td>
         </tr>""")
     if not rows_html:
@@ -209,7 +228,7 @@ def render_candidate_table(ranked):
     return f"""
     <div class="cand-table-wrap">
     <table class="cand-table">
-      <thead><tr><th>#</th><th>Candidate</th><th>Match Score</th><th>Recommendation</th></tr></thead>
+      <thead><tr><th>#</th><th>Candidate</th><th>Match Score</th><th>Why shortlisted (matched skills)</th><th>Recommendation</th></tr></thead>
       <tbody>{''.join(rows_html)}</tbody>
     </table>
     </div>"""
@@ -446,7 +465,86 @@ def check_replies(sender_email, app_password, emails_state):
           <div class="email-subject">✉ {_html.escape(r['subject'])}</div>
           <div class="email-body">{_html.escape(r['body'])}</div>
         </div>""")
-    return "".join(cards)
+    return f'<div class="reply-grid">{"".join(cards)}</div>'
+
+
+_APPLICATION_KEYWORDS = [
+    "resume", "cv", "curriculum vitae", "application", "applying", "apply for",
+    "job application", "position", "vacancy", "candidate", "cover letter",
+]
+
+
+def _find_attachment_name(msg):
+    if not msg.is_multipart():
+        return None
+    for part in msg.walk():
+        cd = part.get("Content-Disposition", "") or ""
+        if "attachment" in cd.lower():
+            filename = part.get_filename() or ""
+            if filename.lower().endswith((".pdf", ".doc", ".docx", ".rtf", ".txt")):
+                return filename
+    return None
+
+
+def fetch_candidate_applications(gmail_address, app_password, limit=60):
+    """
+    Scans the given Gmail inbox (any HR's own account, entered at runtime) and
+    surfaces emails that look like candidate job applications — either they
+    carry a resume-like attachment, or their subject/body mentions common
+    application keywords. This is a heuristic filter, not a guarantee.
+    """
+    if not gmail_address or not app_password:
+        return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
+
+    found = []
+    try:
+        imap = imaplib.IMAP4_SSL("imap.gmail.com")
+        imap.login(gmail_address, app_password)
+        imap.select("INBOX")
+        status, data = imap.search(None, "ALL")
+        ids = data[0].split()[-limit:]
+        for msg_id in reversed(ids):
+            status, msg_data = imap.fetch(msg_id, "(RFC822)")
+            if not msg_data or not msg_data[0]:
+                continue
+            raw = msg_data[0][1]
+            msg = email_lib.message_from_bytes(raw)
+            subject = msg.get("Subject", "") or ""
+            body = _extract_plain_body(msg)
+            attachment = _find_attachment_name(msg)
+            blob = f"{subject} {body}".lower()
+            if attachment or any(k in blob for k in _APPLICATION_KEYWORDS):
+                from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
+                found.append({
+                    "from_name": from_name or (from_addr.split("@")[0] if from_addr else "Unknown"),
+                    "from_addr": from_addr,
+                    "subject": subject or "(no subject)",
+                    "date": msg.get("Date", ""),
+                    "snippet": body.strip()[:350],
+                    "attachment": attachment,
+                })
+        imap.logout()
+    except imaplib.IMAP4.error as ex:
+        return f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
+    except Exception as ex:
+        return f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
+
+    if not found:
+        return '<div class="empty-state">No candidate application emails detected in this inbox.</div>'
+
+    cards = []
+    for a in found:
+        att = (f'<span class="attach-chip">📎 {_html.escape(a["attachment"])}</span>'
+               if a["attachment"] else "")
+        cards.append(f"""
+        <div class="reply-card">
+          <span class="reply-date">{_html.escape(a['date'])}</span>
+          <div class="email-to">{_html.escape(a['from_name'])}</div>
+          <div class="email-addr">{_html.escape(a['from_addr'])}</div>
+          <div class="email-subject">✉ {_html.escape(a['subject'])} {att}</div>
+          <div class="email-body">{_html.escape(a['snippet'])}</div>
+        </div>""")
+    return f'<div class="reply-grid">{"".join(cards)}</div>'
 
 
 # --------------------------------------------------------------------------- #
@@ -479,9 +577,27 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         )
         run_btn = gr.Button("▶  Run Pipeline", variant="primary", scale=1)
 
+    with gr.Accordion("📧 Gmail inbox access — enter YOUR OWN Gmail (used for Applications + Replies tabs, never saved)", open=False):
+        gr.Markdown(
+            "Any HR using this tool enters their own Gmail here at runtime — nothing is stored. "
+            "Needs a **Gmail App Password** (not your normal password): generate one at "
+            "`myaccount.google.com/apppasswords` (requires 2-Step Verification to be ON)."
+        )
+        with gr.Row():
+            gmail_email_in = gr.Textbox(label="Gmail address", placeholder="you@gmail.com")
+            gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
+
     stats_out = gr.HTML()
 
     with gr.Tabs():
+        with gr.Tab("📨  Applications Inbox"):
+            gr.Markdown(
+                "Scans the Gmail inbox above for emails that look like **candidate job applications** "
+                "(resume attachments, or subject/body mentioning application-related keywords)."
+            )
+            fetch_apps_btn = gr.Button("🔍  Scan Inbox for Candidate Applications", variant="primary")
+            applications_out = gr.HTML()
+
         with gr.Tab("🏆  Ranked Candidates"):
             table_out = gr.HTML()
 
@@ -503,21 +619,12 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
                     sender_email_in = gr.Textbox(label="Sender email (verified in Brevo)", placeholder="you@example.com")
                     sender_name_in = gr.Textbox(label="Sender name", placeholder="HR Team", value="HR Team")
                 brevo_key_in = gr.Textbox(label="Brevo API Key", type="password", placeholder="xkeysib-...")
-            send_btn = gr.Button("📤  Send All Interview Emails", variant="primary")
+            send_btn = gr.Button("📤  Send All Interview Emails to Shortlisted Candidates", variant="primary")
             send_status = gr.HTML()
             emails_out = gr.HTML()
 
         with gr.Tab("📥  Replies"):
-            gr.Markdown("Checks a Gmail inbox for replies **from the shortlisted candidates** you emailed.")
-            with gr.Accordion("📧 Gmail credentials for checking replies (never saved)", open=False):
-                gr.Markdown(
-                    "Needs a **Gmail App Password** (not your normal password) — "
-                    "generate one at `myaccount.google.com/apppasswords` "
-                    "(requires 2-Step Verification to be ON)."
-                )
-                with gr.Row():
-                    reply_email_in = gr.Textbox(label="Gmail address", placeholder="you@gmail.com")
-                    reply_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
+            gr.Markdown("Checks the Gmail inbox above for replies **from the shortlisted candidates** you emailed.")
             refresh_btn = gr.Button("🔄  Check for Replies", variant="primary")
             replies_out = gr.HTML()
 
@@ -533,6 +640,12 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         outputs=[stats_out, table_out, score_plot, skills_plot, emails_out, emails_state],
     )
 
+    fetch_apps_btn.click(
+        fn=fetch_candidate_applications,
+        inputs=[gmail_email_in, gmail_app_password_in],
+        outputs=[applications_out],
+    )
+
     send_btn.click(
         fn=send_all_emails,
         inputs=[sender_email_in, sender_name_in, brevo_key_in, emails_state],
@@ -541,7 +654,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
 
     refresh_btn.click(
         fn=check_replies,
-        inputs=[reply_email_in, reply_app_password_in, emails_state],
+        inputs=[gmail_email_in, gmail_app_password_in, emails_state],
         outputs=[replies_out],
     )
 
