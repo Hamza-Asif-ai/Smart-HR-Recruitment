@@ -523,6 +523,23 @@ def _extract_attachment_text(msg):
     return None, ""
 
 
+def render_application_email_cards(candidates):
+    if not candidates:
+        return ""
+    cards = []
+    for c in candidates:
+        att = (f'<span class="attach-chip">📎 {_html.escape(c["_attachment"])}</span>'
+               if c.get("_attachment") else "")
+        cards.append(f"""
+        <div class="reply-card">
+          <div class="email-to">{_html.escape(c['name'])}</div>
+          <div class="email-addr">{_html.escape(c['email'])}</div>
+          <div class="email-subject">✉ {_html.escape(c.get('_subject', '') or '(no subject)')} {att}</div>
+          <div class="email-body">Match score: {c['match_percent']}% — {_html.escape(c['recommendation'])}</div>
+        </div>""")
+    return f'<div class="reply-grid">{"".join(cards)}</div>'
+
+
 def analyze_inbox_applications(gmail_address, app_password, limit=60):
     """
     Scans the given Gmail inbox for candidate application emails, extracts
@@ -535,14 +552,14 @@ def analyze_inbox_applications(gmail_address, app_password, limit=60):
     empty_state = {"title": "", "candidates": []}
     if not gmail_address or not app_password:
         msg = '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
-        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
 
     try:
         jd_text = fs_mod.read_job_description()
         requirements = skills_mod.jd_parser_skill(jd_text)
     except Exception as ex:
         msg = f'<div class="status-line err">❌ Could not read the job description: {_html.escape(str(ex))}</div>'
-        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
 
     candidates = []
     try:
@@ -586,10 +603,10 @@ def analyze_inbox_applications(gmail_address, app_password, limit=60):
         imap.logout()
     except imaplib.IMAP4.error as ex:
         msg = f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
-        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
     except Exception as ex:
         msg = f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
-        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
 
     candidates.sort(key=lambda c: c["match_percent"], reverse=True)
     for i, c in enumerate(candidates, 1):
@@ -597,7 +614,7 @@ def analyze_inbox_applications(gmail_address, app_password, limit=60):
 
     if not candidates:
         msg = '<div class="empty-state">No candidate application emails detected in this inbox.</div>'
-        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
 
     skill_counter = Counter()
     for c in candidates:
@@ -614,7 +631,7 @@ def analyze_inbox_applications(gmail_address, app_password, limit=60):
     status = (f'<div class="status-line ok">✅ Found {len(candidates)} candidate application email(s), '
               f'scored against "{_html.escape(requirements.get("title", ""))}".</div>')
     state = {"title": requirements.get("title", "the role"), "candidates": candidates}
-    return status, table_html, score_fig, skills_fig, gr.update(choices=choice_tuples, value=[]), state
+    return status, table_html, score_fig, skills_fig, gr.update(choices=choice_tuples, value=[]), state, render_application_email_cards(candidates)
 
 
 def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, selected_emails, inbox_state):
@@ -709,6 +726,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             )
             fetch_apps_btn = gr.Button("🔍  Scan Inbox for Candidate Applications", variant="primary")
             applications_status = gr.HTML()
+            applications_cards_out = gr.HTML()
             gr.Markdown("**Select candidates to invite for an interview:**")
             candidate_checkbox = gr.CheckboxGroup(choices=[], label="Detected candidates")
             send_selected_btn = gr.Button("📤  Send Interview Invitation to Selected", variant="primary")
@@ -751,7 +769,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
         inputs=[gmail_email_in, gmail_app_password_in],
-        outputs=[applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state],
+        outputs=[applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state, applications_cards_out],
     )
 
     send_selected_btn.click(
