@@ -23,6 +23,7 @@ import html as _html
 import imaplib
 import email as email_lib
 import email.utils
+import email.header
 import smtplib
 import requests
 from io import BytesIO
@@ -408,6 +409,23 @@ def send_all_emails(sender_email, sender_name, brevo_api_key, emails_state):
     return "".join(lines)
 
 
+def _decode_mime_header(value: str) -> str:
+    """Decode MIME encoded-word headers (e.g. '=?UTF-8?Q?...?=') into plain text."""
+    if not value:
+        return value
+    try:
+        parts = email.header.decode_header(value)
+        decoded = []
+        for text, charset in parts:
+            if isinstance(text, bytes):
+                decoded.append(text.decode(charset or "utf-8", errors="ignore"))
+            else:
+                decoded.append(text)
+        return "".join(decoded)
+    except Exception:
+        return value
+
+
 def _extract_plain_body(msg) -> str:
     if msg.is_multipart():
         for part in msg.walk():
@@ -448,7 +466,7 @@ def check_replies(sender_email, app_password, emails_state):
                 body = _extract_plain_body(msg).strip()
                 replies.append({
                     "from": from_addr,
-                    "subject": msg.get("Subject", "(no subject)"),
+                    "subject": _decode_mime_header(msg.get("Subject", "(no subject)")),
                     "date": msg.get("Date", ""),
                     "body": body[:600],
                 })
@@ -574,7 +592,7 @@ def analyze_inbox_applications(gmail_address, app_password, limit=60):
                 continue
             raw = msg_data[0][1]
             msg = email_lib.message_from_bytes(raw)
-            subject = msg.get("Subject", "") or ""
+            subject = _decode_mime_header(msg.get("Subject", "") or "")
             body = _extract_plain_body(msg)
             attachment_name, attachment_text = _extract_attachment_text(msg)
             blob = f"{subject} {body}".lower()
@@ -583,6 +601,7 @@ def analyze_inbox_applications(gmail_address, app_password, limit=60):
                 continue
 
             from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
+            from_name = _decode_mime_header(from_name)
             resume_text = attachment_text.strip() if attachment_text.strip() else body
 
             profile = skills_mod.resume_parser_skill(resume_text, source_id=from_addr or subject)
@@ -727,13 +746,13 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             fetch_apps_btn = gr.Button("🔍  Scan Inbox for Candidate Applications", variant="primary")
             applications_status = gr.HTML()
             applications_cards_out = gr.HTML()
-            gr.Markdown("**Select candidates to invite for an interview:**")
-            candidate_checkbox = gr.CheckboxGroup(choices=[], label="Detected candidates")
-            send_selected_btn = gr.Button("📤  Send Interview Invitation to Selected", variant="primary")
-            send_selected_status = gr.HTML()
 
         with gr.Tab("🏆  Ranked Candidates"):
             table_out = gr.HTML()
+            gr.Markdown("**Select candidates to invite for an interview:**")
+            candidate_checkbox = gr.CheckboxGroup(choices=[], label="Detected candidates (ranked highest match first)")
+            send_selected_btn = gr.Button("📤  Send Interview Invitation to Selected", variant="primary")
+            send_selected_status = gr.HTML()
 
         with gr.Tab("📊  Dashboard"):
             with gr.Row():
