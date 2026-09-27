@@ -25,9 +25,14 @@ import email as email_lib
 import email.utils
 import smtplib
 import requests
+from io import BytesIO
 from collections import Counter
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+import pypdf
+from src import skills as skills_mod
+from src import mcp_filesystem_server as fs_mod
 
 import matplotlib
 matplotlib.use("Agg")
@@ -486,17 +491,60 @@ def _find_attachment_name(msg):
     return None
 
 
-def fetch_candidate_applications(gmail_address, app_password, limit=60):
-    """
-    Scans the given Gmail inbox (any HR's own account, entered at runtime) and
-    surfaces emails that look like candidate job applications — either they
-    carry a resume-like attachment, or their subject/body mentions common
-    application keywords. This is a heuristic filter, not a guarantee.
-    """
-    if not gmail_address or not app_password:
-        return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
+def _extract_attachment_text(msg):
+    """Return (filename, extracted_text) for the first resume-like attachment, or (None, "")."""
+    if not msg.is_multipart():
+        return None, ""
+    for part in msg.walk():
+        cd = part.get("Content-Disposition", "") or ""
+        if "attachment" not in cd.lower():
+            continue
+        filename = part.get_filename() or ""
+        low = filename.lower()
+        if not low.endswith((".pdf", ".txt", ".rtf")):
+            # .doc/.docx text extraction needs extra libraries we don't depend on;
+            # skip those and fall back to the email body instead.
+            continue
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        if low.endswith(".pdf"):
+            try:
+                reader = pypdf.PdfReader(BytesIO(payload))
+                text = "\n".join((page.extract_text() or "") for page in reader.pages)
+                return filename, text
+            except Exception:
+                continue
+        else:
+            try:
+                return filename, payload.decode("utf-8", errors="ignore")
+            except Exception:
+                continue
+    return None, ""
 
-    found = []
+
+def analyze_inbox_applications(gmail_address, app_password, limit=60):
+    """
+    Scans the given Gmail inbox for candidate application emails, extracts
+    each one's resume (attachment text when available, else the email body),
+    and scores it against the current job description using the same
+    resume_parser_skill / candidate_scorer_skill used by the local pipeline.
+    Returns candidates ranked exactly like the file-based pipeline, so the
+    Ranked Candidates tab and Dashboard reflect real inbox applicants.
+    """
+    empty_state = {"title": "", "candidates": []}
+    if not gmail_address or not app_password:
+        msg = '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+
+    try:
+        jd_text = fs_mod.read_job_description()
+        requirements = skills_mod.jd_parser_skill(jd_text)
+    except Exception as ex:
+        msg = f'<div class="status-line err">❌ Could not read the job description: {_html.escape(str(ex))}</div>'
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+
+    candidates = []
     try:
         imap = imaplib.IMAP4_SSL("imap.gmail.com")
         imap.login(gmail_address, app_password)
@@ -511,40 +559,89 @@ def fetch_candidate_applications(gmail_address, app_password, limit=60):
             msg = email_lib.message_from_bytes(raw)
             subject = msg.get("Subject", "") or ""
             body = _extract_plain_body(msg)
-            attachment = _find_attachment_name(msg)
+            attachment_name, attachment_text = _extract_attachment_text(msg)
             blob = f"{subject} {body}".lower()
-            if attachment or any(k in blob for k in _APPLICATION_KEYWORDS):
-                from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
-                found.append({
-                    "from_name": from_name or (from_addr.split("@")[0] if from_addr else "Unknown"),
-                    "from_addr": from_addr,
-                    "subject": subject or "(no subject)",
-                    "date": msg.get("Date", ""),
-                    "snippet": body.strip()[:350],
-                    "attachment": attachment,
-                })
+            has_attachment = _find_attachment_name(msg) is not None
+            if not (has_attachment or any(k in blob for k in _APPLICATION_KEYWORDS)):
+                continue
+
+            from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
+            resume_text = attachment_text.strip() if attachment_text.strip() else body
+
+            profile = skills_mod.resume_parser_skill(resume_text, source_id=from_addr or subject)
+            if from_name:
+                profile["name"] = from_name
+            elif not profile.get("name") or profile["name"] == "Unknown Candidate":
+                profile["name"] = (from_addr.split("@")[0] if from_addr else "Unknown Candidate").title()
+            if from_addr:
+                profile["email"] = from_addr
+
+            result = skills_mod.candidate_scorer_skill(profile, requirements)
+            result["email"] = profile["email"]
+            result["skills"] = profile["skills"]
+            result["name"] = profile["name"]
+            result["_subject"] = subject
+            result["_attachment"] = attachment_name
+            candidates.append(result)
         imap.logout()
     except imaplib.IMAP4.error as ex:
-        return f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
+        msg = f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
     except Exception as ex:
-        return f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
+        msg = f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
 
-    if not found:
-        return '<div class="empty-state">No candidate application emails detected in this inbox.</div>'
+    candidates.sort(key=lambda c: c["match_percent"], reverse=True)
+    for i, c in enumerate(candidates, 1):
+        c["rank"] = i
 
-    cards = []
-    for a in found:
-        att = (f'<span class="attach-chip">📎 {_html.escape(a["attachment"])}</span>'
-               if a["attachment"] else "")
-        cards.append(f"""
-        <div class="reply-card">
-          <span class="reply-date">{_html.escape(a['date'])}</span>
-          <div class="email-to">{_html.escape(a['from_name'])}</div>
-          <div class="email-addr">{_html.escape(a['from_addr'])}</div>
-          <div class="email-subject">✉ {_html.escape(a['subject'])} {att}</div>
-          <div class="email-body">{_html.escape(a['snippet'])}</div>
-        </div>""")
-    return f'<div class="reply-grid">{"".join(cards)}</div>'
+    if not candidates:
+        msg = '<div class="empty-state">No candidate application emails detected in this inbox.</div>'
+        return msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state
+
+    skill_counter = Counter()
+    for c in candidates:
+        skill_counter.update(c.get("skills", []))
+    top_skills = skill_counter.most_common(8)
+
+    table_html = render_candidate_table(candidates)
+    score_fig = make_score_chart(candidates)
+    skills_fig = make_skills_chart(top_skills)
+    choice_tuples = [
+        (f"#{c['rank']} {c['name']} — {c['match_percent']}% — {c['email']}", c["email"])
+        for c in candidates
+    ]
+    status = (f'<div class="status-line ok">✅ Found {len(candidates)} candidate application email(s), '
+              f'scored against "{_html.escape(requirements.get("title", ""))}".</div>')
+    state = {"title": requirements.get("title", "the role"), "candidates": candidates}
+    return status, table_html, score_fig, skills_fig, gr.update(choices=choice_tuples, value=[]), state
+
+
+def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, selected_emails, inbox_state):
+    if not selected_emails:
+        return '<div class="status-line err">⚠ Select at least one candidate first (checkboxes above).</div>'
+    candidates = (inbox_state or {}).get("candidates", [])
+    title = (inbox_state or {}).get("title") or "the role"
+    by_email = {c["email"]: c for c in candidates}
+
+    slots = skills_mod.suggest_interview_slots(len(selected_emails))
+    drafts = []
+    for i, addr in enumerate(selected_emails):
+        c = by_email.get(addr)
+        if not c:
+            continue
+        slot = slots[i] if i < len(slots) else ""
+        drafts.append(skills_mod.email_drafter_skill(c, role_title=title, slot=slot))
+
+    if not drafts:
+        return '<div class="status-line err">⚠ Could not match the selected candidates — try scanning the inbox again.</div>'
+
+    return send_all_emails(sender_email, sender_name, brevo_api_key, drafts)
+
+
+def fetch_candidate_applications(gmail_address, app_password, limit=60):
+    """Deprecated: superseded by analyze_inbox_applications, kept only if imported elsewhere."""
+    return analyze_inbox_applications(gmail_address, app_password, limit)[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -552,6 +649,7 @@ def fetch_candidate_applications(gmail_address, app_password, limit=60):
 # --------------------------------------------------------------------------- #
 with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     emails_state = gr.State([])
+    inbox_state = gr.State({"title": "", "candidates": []})
 
     gr.HTML("""
       <div id="header-wrap">
@@ -575,7 +673,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             label="Run as role",
             scale=2,
         )
-        run_btn = gr.Button("▶  Run Pipeline", variant="primary", scale=1)
+        run_btn = gr.Button("▶  Run Pipeline (sample resumes)", variant="primary", scale=1)
 
     with gr.Accordion("📧 Gmail inbox access — enter YOUR OWN Gmail (used for Applications + Replies tabs, never saved)", open=False):
         gr.Markdown(
@@ -587,16 +685,34 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             gmail_email_in = gr.Textbox(label="Gmail address", placeholder="you@gmail.com")
             gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
 
+    with gr.Accordion("📧 Brevo sender details — used to actually send emails (never saved)", open=False):
+        gr.Markdown(
+            "Sends via the **Brevo** transactional email API (HTTPS) — works from the deployed "
+            "public link too, unlike raw Gmail SMTP which most free hosts block.\n\n"
+            "1. In your Brevo dashboard, go to **Senders & IP** (under Settings) and verify "
+            "the email address you'll send from — a confirmation link is emailed to it\n"
+            "2. Get your key under **Transactional → Settings → API Keys → Generate a new API key**"
+        )
+        with gr.Row():
+            sender_email_in = gr.Textbox(label="Sender email (verified in Brevo)", placeholder="you@example.com")
+            sender_name_in = gr.Textbox(label="Sender name", placeholder="HR Team", value="HR Team")
+        brevo_key_in = gr.Textbox(label="Brevo API Key", type="password", placeholder="xkeysib-...")
+
     stats_out = gr.HTML()
 
     with gr.Tabs():
         with gr.Tab("📨  Applications Inbox"):
             gr.Markdown(
                 "Scans the Gmail inbox above for emails that look like **candidate job applications** "
-                "(resume attachments, or subject/body mentioning application-related keywords)."
+                "(resume attachments, or subject/body mentioning application-related keywords), scores "
+                "each one against the job description, and feeds the results into the tabs on the right."
             )
             fetch_apps_btn = gr.Button("🔍  Scan Inbox for Candidate Applications", variant="primary")
-            applications_out = gr.HTML()
+            applications_status = gr.HTML()
+            gr.Markdown("**Select candidates to invite for an interview:**")
+            candidate_checkbox = gr.CheckboxGroup(choices=[], label="Detected candidates")
+            send_selected_btn = gr.Button("📤  Send Interview Invitation to Selected", variant="primary")
+            send_selected_status = gr.HTML()
 
         with gr.Tab("🏆  Ranked Candidates"):
             table_out = gr.HTML()
@@ -607,18 +723,10 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
                 skills_plot = gr.Plot(label="Top Skills in Applicant Pool")
 
         with gr.Tab("✉️  Interview Emails"):
-            with gr.Accordion("📧 Brevo sender details (used only for this session, never saved)", open=False):
-                gr.Markdown(
-                    "Sends via the **Brevo** transactional email API (HTTPS) — works from the deployed "
-                    "public link too, unlike raw Gmail SMTP which most free hosts block.\n\n"
-                    "1. In your Brevo dashboard, go to **Senders & IP** (under Settings) and verify "
-                    "the email address you'll send from — a confirmation link is emailed to it\n"
-                    "2. Get your key under **Transactional → Settings → API Keys → Generate a new API key**"
-                )
-                with gr.Row():
-                    sender_email_in = gr.Textbox(label="Sender email (verified in Brevo)", placeholder="you@example.com")
-                    sender_name_in = gr.Textbox(label="Sender name", placeholder="HR Team", value="HR Team")
-                brevo_key_in = gr.Textbox(label="Brevo API Key", type="password", placeholder="xkeysib-...")
+            gr.Markdown(
+                "Auto-drafted invitations for candidates from the **sample resume pipeline** "
+                "(Run Pipeline button above) who crossed the 70% shortlist threshold."
+            )
             send_btn = gr.Button("📤  Send All Interview Emails to Shortlisted Candidates", variant="primary")
             send_status = gr.HTML()
             emails_out = gr.HTML()
@@ -641,9 +749,15 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     )
 
     fetch_apps_btn.click(
-        fn=fetch_candidate_applications,
+        fn=analyze_inbox_applications,
         inputs=[gmail_email_in, gmail_app_password_in],
-        outputs=[applications_out],
+        outputs=[applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state],
+    )
+
+    send_selected_btn.click(
+        fn=send_invitations_to_selected,
+        inputs=[sender_email_in, sender_name_in, brevo_key_in, candidate_checkbox, inbox_state],
+        outputs=[send_selected_status],
     )
 
     send_btn.click(
