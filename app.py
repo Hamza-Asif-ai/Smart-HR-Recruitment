@@ -970,18 +970,8 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             gr.Markdown(
                 "Scans the Gmail inbox above for emails that look like **candidate job applications** "
                 "(resume attachments, or subject/body mentioning application-related keywords), scores "
-                "each one against the role details below, and feeds the full results into the other tabs."
-            )
-            with gr.Row():
-                position_in = gr.Textbox(label="Position / Job title", placeholder="e.g. Senior Backend Engineer")
-                min_years_in = gr.Number(label="Minimum experience (years)", value=0, precision=0)
-            skills_in = gr.Textbox(
-                label="Required skills (comma-separated)",
-                placeholder="e.g. Python, AWS, Docker, Kubernetes, SQL",
-                lines=2,
-            )
-            gr.Markdown(
-                "_Leave Position/Skills blank to fall back to the sample job description file in `data/job_descriptions/`._"
+                "each one against the role details entered above, and feeds the full results into the "
+                "other tabs."
             )
             fetch_apps_btn = gr.Button("🔍  Scan Inbox for Candidate Applications", variant="primary")
             applications_status = gr.HTML()
@@ -1015,7 +1005,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
 
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
-        inputs=[gmail_email_in, gmail_app_password_in, position_in, skills_in, min_years_in],
+        inputs=[gmail_email_in, gmail_app_password_in, position_in, skills_in, nice_in, min_exp_in],
         outputs=[stats_out, applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state, applications_cards_out],
     )
 
