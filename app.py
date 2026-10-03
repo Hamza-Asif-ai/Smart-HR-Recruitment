@@ -665,6 +665,13 @@ def _parse_skill_list(text, limit=25):
 
 _AMBIGUOUS_SKILLS = {"go", "r", "c"}
 
+# Microsoft Office apps whose names are also ordinary English words/verbs
+# ("...aims to excel in...", "...access to...", "...as part of a project...",
+# "...to word the summary...", "...works well in teams...") — these need a
+# much stricter context than a plain word match, or almost every resume
+# "matches" them regardless of actual skill.
+_OFFICE_AMBIGUOUS = {"excel", "word", "access", "project", "teams", "outlook", "forms", "planner"}
+
 
 def _skill_present(skill, text_norm):
     """True if `skill` appears in the (lower-cased, whitespace-normalised) resume text.
@@ -677,6 +684,15 @@ def _skill_present(skill, text_norm):
             return True
         return re.search(r"(?<![a-z0-9])" + re.escape(skill) +
                          r"(?=\s*[,;/|•·)]|\s+(?:developer|programming|language|lang)\b)", text_norm) is not None
+
+    if skill in _OFFICE_AMBIGUOUS:
+        # Only count it after "Microsoft"/"MS" (e.g. "Microsoft Excel"), or when it
+        # sits in a skills list (immediately followed by a delimiter or end of text) —
+        # never on its own as a plain English word/verb.
+        esc = re.escape(skill)
+        pattern = (r"(?<![a-z0-9])(?:microsoft|ms)\s+" + esc + r"(?![a-z0-9])"
+                   r"|(?<![a-z0-9])" + esc + r"(?=\s*(?:[,;/|•·)]|$))")
+        return re.search(pattern, text_norm) is not None
 
     aliases = skills_mod.SKILL_VOCAB.get(skill)
     if aliases:
@@ -974,12 +990,12 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
 
     gr.Markdown("### 🎯 What are you hiring for?  \nCandidates are detected, ranked, shortlisted and recommended against these requirements.")
     with gr.Row():
-        position_in = gr.Textbox(label="Position / job title", placeholder="e.g. Data Analyst", scale=3)
-        company_in = gr.Textbox(label="Company name (used in invitation emails)", placeholder="e.g. Acme Pvt Ltd", scale=3)
+        position_in = gr.Textbox(label="Position / job title", scale=3)
+        company_in = gr.Textbox(label="Company name (used in invitation emails)", scale=3)
         min_exp_in = gr.Number(label="Minimum experience (years)", value=0, minimum=0, precision=0, scale=1)
     with gr.Row():
-        skills_in = gr.Textbox(label="Required skills (comma separated)", placeholder="e.g. python, sql, power bi, excel", lines=2, scale=3)
-        nice_in = gr.Textbox(label="Nice-to-have skills (optional)", placeholder="e.g. tableau, aws", lines=2, scale=2)
+        skills_in = gr.Textbox(label="Required skills (comma separated)", lines=2, scale=3)
+        nice_in = gr.Textbox(label="Nice-to-have skills (optional)", lines=2, scale=2)
 
     with gr.Accordion("📧 Gmail inbox access — enter YOUR OWN Gmail (used for Applications + Replies tabs, never saved)", open=False):
         gr.Markdown(
