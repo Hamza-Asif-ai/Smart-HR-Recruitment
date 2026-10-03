@@ -185,6 +185,18 @@ table.cand-table tr:hover td {background:#181826;}
 
 footer {display:none !important;}
 
+/* ---------- Kill Chrome's white autofill background on inputs ---------- */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #1a1a29 inset !important;
+  box-shadow: 0 0 0 1000px #1a1a29 inset !important;
+  -webkit-text-fill-color: #e4e4f0 !important;
+  caret-color: #e4e4f0 !important;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
 /* ---------- Credit footer ---------- */
 #credit-footer {text-align:center; padding: 28px 0 14px 0; margin-top: 10px;
                 border-top: 1px solid #1d1d2c;}
@@ -474,43 +486,48 @@ def _extract_plain_body(msg) -> str:
         return ""
 
 
-def check_replies(sender_email, app_password, emails_state):
+def check_replies(sender_email, app_password, emails_state=None):
+    """
+    Scans the inbox for genuine replies (Re: subject, or In-Reply-To/References
+    headers) — independent of whether anything was sent earlier in this browser
+    session, since gr.State resets on page reload and shouldn't gate this.
+    If emails_state (candidates invited this session) is available, it's used
+    only to label which replies came from an invited candidate — never to hide
+    results when it's empty.
+    """
     if not sender_email or not app_password:
         return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
-    if not emails_state:
-        return '<div class="status-line err">⚠ Run the pipeline first — that\'s how the candidate email list is known.</div>'
 
-    candidate_addrs = {e["to"].lower() for e in emails_state}
+    candidate_addrs = {e["to"].lower() for e in (emails_state or [])}
     replies = []
     try:
         imap = imaplib.IMAP4_SSL("imap.gmail.com")
         imap.login(sender_email, app_password)
         imap.select("INBOX")
         status, data = imap.search(None, "ALL")
-        ids = data[0].split()[-100:]  # last 100 messages, newest last
+        ids = data[0].split()[-150:]  # last 150 messages, newest last
         for msg_id in reversed(ids):
             status, msg_data = imap.fetch(msg_id, "(RFC822)")
             if not msg_data or not msg_data[0]:
                 continue
             raw = msg_data[0][1]
             msg = email_lib.message_from_bytes(raw)
-            from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
-            if from_addr not in candidate_addrs:
-                continue
             subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
-            # Only real replies to our invitation — not the candidate's original
-            # application email, which also sits in the same inbox from the same address.
+            # Only real replies — not a candidate's original application email,
+            # which can sit in the same inbox from the same address.
             is_reply = (subject.strip().lower().startswith("re:")
                         or msg.get("In-Reply-To") is not None
                         or msg.get("References") is not None)
             if not is_reply:
                 continue
+            from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
             body = _extract_plain_body(msg).strip()
             replies.append({
                 "from": from_addr,
                 "subject": subject,
                 "date": msg.get("Date", ""),
                 "body": body[:600],
+                "invited": from_addr in candidate_addrs,
             })
         imap.logout()
     except imaplib.IMAP4.error as ex:
@@ -519,14 +536,15 @@ def check_replies(sender_email, app_password, emails_state):
         return f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
 
     if not replies:
-        return '<div class="empty-state">No replies from shortlisted candidates found in the inbox yet.</div>'
+        return '<div class="empty-state">No replies found in the inbox yet.</div>'
 
     cards = []
     for r in replies:
+        badge = '<span class="attach-chip">✓ invited this session</span>' if r["invited"] else ""
         cards.append(f"""
         <div class="reply-card">
           <span class="reply-date">{_html.escape(r['date'])}</span>
-          <div class="email-to">{_html.escape(r['from'])}</div>
+          <div class="email-to">{_html.escape(r['from'])} {badge}</div>
           <div class="email-subject">✉ {_html.escape(r['subject'])}</div>
           <div class="email-body">{_html.escape(r['body'])}</div>
         </div>""")
