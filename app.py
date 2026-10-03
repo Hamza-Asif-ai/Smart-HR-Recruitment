@@ -71,7 +71,8 @@ THEME = gr.themes.Soft(
 )
 
 CSS = """
-.gradio-container {max-width: 1560px !important; margin: 0 auto !important;}
+.gradio-container {max-width: 100% !important; width: 100% !important; margin: 0 !important;
+                    padding-left: 28px !important; padding-right: 28px !important; box-sizing: border-box;}
 
 /* ---------- Header ---------- */
 #header-wrap {display:flex; align-items:center; justify-content:center; gap:14px;
@@ -494,14 +495,23 @@ def check_replies(sender_email, app_password, emails_state):
             raw = msg_data[0][1]
             msg = email_lib.message_from_bytes(raw)
             from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
-            if from_addr in candidate_addrs:
-                body = _extract_plain_body(msg).strip()
-                replies.append({
-                    "from": from_addr,
-                    "subject": _decode_mime_header(msg.get("Subject", "(no subject)")),
-                    "date": msg.get("Date", ""),
-                    "body": body[:600],
-                })
+            if from_addr not in candidate_addrs:
+                continue
+            subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
+            # Only real replies to our invitation — not the candidate's original
+            # application email, which also sits in the same inbox from the same address.
+            is_reply = (subject.strip().lower().startswith("re:")
+                        or msg.get("In-Reply-To") is not None
+                        or msg.get("References") is not None)
+            if not is_reply:
+                continue
+            body = _extract_plain_body(msg).strip()
+            replies.append({
+                "from": from_addr,
+                "subject": subject,
+                "date": msg.get("Date", ""),
+                "body": body[:600],
+            })
         imap.logout()
     except imaplib.IMAP4.error as ex:
         return f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
