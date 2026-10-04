@@ -663,6 +663,20 @@ def _parse_skill_list(text, limit=25):
     return out[:limit]
 
 
+_POSITION_STOPWORDS = {
+    "position", "role", "job", "title", "the", "a", "an", "of", "for", "and", "at", "in", "to",
+    "we", "are", "is", "hiring", "looking", "opening", "vacancy", "senior", "junior", "lead",
+    "sr", "jr", "i", "ii", "iii", "iv", "intern", "internship", "opportunity",
+}
+
+
+def _position_words(position):
+    """'Senior Software Engineer' -> ['software', 'engineer'] — the words that actually
+    identify the role, stripped of seniority/filler words that would over-restrict matching."""
+    words = re.findall(r"[a-z0-9]+", (position or "").lower())
+    return [w for w in words if w not in _POSITION_STOPWORDS and len(w) > 1]
+
+
 _AMBIGUOUS_SKILLS = {"go", "r", "c"}
 
 # Microsoft Office apps whose names are also ordinary English words/verbs
@@ -847,6 +861,8 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
         imap = imaplib.IMAP4_SSL("imap.gmail.com")
         imap.login(gmail_address, app_password)
         imap.select("INBOX")
+        position_words = _position_words(requirements["title"])
+        total_found = 0
         status, data = imap.search(None, "ALL")
         ids = data[0].split()[-limit:]
         for msg_id in reversed(ids):
@@ -860,6 +876,12 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
             blob = f"{subject} {body}".lower()
             has_attachment = _find_attachment_name(msg) is not None
             if not (has_attachment or any(k in blob for k in _APPLICATION_KEYWORDS)):
+                continue
+            total_found += 1
+            # The position itself must actually be mentioned in the email (subject or
+            # body) — e.g. "Software Engineer" applicants only, not every applicant who
+            # happens to share a skill or two with the role.
+            if position_words and not all(w in blob for w in position_words):
                 continue
 
             from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
@@ -895,20 +917,15 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     except Exception as ex:
         return _fail(f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>')
 
-    if not candidates:
-        return _fail('<div class="empty-state">No candidate application emails detected in this inbox.</div>')
-
-    total_found = len(candidates)
-    # Drop applications with zero overlap with the required skills — these are for a
-    # different field entirely (e.g. a marketing resume against a backend role) and
-    # shouldn't clutter the ranked list for this position.
-    candidates = [c for c in candidates if c.get("matched_required")]
     unrelated_count = total_found - len(candidates)
 
     if not candidates:
-        msg = (f'<div class="status-line err">⚠ Found {total_found} application email(s), but none matched '
-               f'any of the required skills for "{_html.escape(requirements["title"])}" — they look like '
-               f'applications for a different role.</div>')
+        if total_found == 0:
+            msg = '<div class="empty-state">No candidate application emails detected in this inbox.</div>'
+        else:
+            msg = (f'<div class="status-line err">⚠ Found {total_found} application email(s) in the inbox, but none '
+                   f'mention "{_html.escape(requirements["title"])}" — they look like applications for a '
+                   f'different role.</div>')
         return _stats_html_for([]), msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
 
     candidates.sort(key=lambda c: c["match_percent"], reverse=True)
@@ -925,7 +942,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
         for c in candidates
     ]
     req_txt = ", ".join(requirements["required_skills"])
-    excluded_note = (f' · {unrelated_count} unrelated application(s) excluded (no matching skills)'
+    excluded_note = (f' · {unrelated_count} application(s) for a different role excluded'
                       if unrelated_count else '')
     status = (f'<div class="status-line ok">✅ Found {len(candidates)} relevant application(s), scored for '
               f'“{_html.escape(requirements["title"])}” · required: {_html.escape(req_txt)} · '
