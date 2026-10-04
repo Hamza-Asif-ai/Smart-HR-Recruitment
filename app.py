@@ -513,14 +513,23 @@ def check_replies(sender_email, app_password, emails_state=None):
             raw = msg_data[0][1]
             msg = email_lib.message_from_bytes(raw)
             subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
+            from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
             # Only real replies — not a candidate's original application email,
-            # which can sit in the same inbox from the same address.
+            # which can sit in the same inbox from the same address. A "Re:" subject
+            # or threading headers are the normal signal; if we know for certain we
+            # invited this address this session, a message from them that does NOT
+            # itself look like a job application (no resume attachment / application
+            # wording) also counts — some mail apps send a fresh message instead of a
+            # true threaded reply, with no "Re:" or In-Reply-To/References header.
+            looks_like_application = (_find_attachment_name(msg) is not None
+                                       or any(k in f"{subject} {_extract_plain_body(msg)}".lower()
+                                              for k in _APPLICATION_KEYWORDS))
             is_reply = (subject.strip().lower().startswith("re:")
                         or msg.get("In-Reply-To") is not None
-                        or msg.get("References") is not None)
+                        or msg.get("References") is not None
+                        or (from_addr in candidate_addrs and not looks_like_application))
             if not is_reply:
                 continue
-            from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
             body = _extract_plain_body(msg).strip()
             replies.append({
                 "from": from_addr,
@@ -1053,17 +1062,17 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             applications_status = gr.HTML()
             applications_cards_out = gr.HTML()
 
+        with gr.Tab("📊  Dashboard"):
+            with gr.Row():
+                score_plot = gr.Plot(label="Candidate Match Scores")
+                skills_plot = gr.Plot(label="Required-skill coverage (candidates who have each skill)")
+
         with gr.Tab("🏆  Ranked Candidates"):
             table_out = gr.HTML()
             gr.Markdown("**Select candidates to invite for an interview:**")
             candidate_checkbox = gr.CheckboxGroup(choices=[], label="Detected candidates (ranked highest match first)")
             send_selected_btn = gr.Button("📤  Send Interview Invitation to Selected", variant="primary")
             send_selected_status = gr.HTML()
-
-        with gr.Tab("📊  Dashboard"):
-            with gr.Row():
-                score_plot = gr.Plot(label="Candidate Match Scores")
-                skills_plot = gr.Plot(label="Required-skill coverage (candidates who have each skill)")
 
         with gr.Tab("✉️  Interview Emails"):
             gr.Markdown(
