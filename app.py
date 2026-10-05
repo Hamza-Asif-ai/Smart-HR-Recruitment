@@ -623,6 +623,41 @@ def _scan_mailbox_for_replies(imap, mailbox, own_addr, candidate_addrs, folder_l
     return found
 
 
+def _clean_gmail_credentials(address, app_password):
+    """Normalise what the HR pasted into the UI. Google shows App Passwords as
+    'abcd efgh ijkl mnop' and copying it often brings along normal or
+    non-breaking spaces / zero-width characters — Gmail then rejects the login
+    (or imaplib fails on the non-ASCII character). The real App Password is just
+    the 16 letters, so all whitespace / invisible characters are removed."""
+    invisible = "\u00a0\u200b\u200c\u200d\u2060\ufeff"
+    addr = "".join(ch for ch in (address or "") if ch not in invisible).strip()
+    pw = "".join(ch for ch in (app_password or "") if not ch.isspace() and ch not in invisible)
+    return addr, pw
+
+
+def _gmail_auth_error_html(ex, app_password):
+    """Friendly explanation for a rejected Gmail IMAP login."""
+    raw = str(ex)
+    if "AUTHENTICATIONFAILED" not in raw.upper() and "INVALID CREDENTIALS" not in raw.upper():
+        return f'<div class="status-line err">❌ IMAP error: {_html.escape(raw)} (check the App Password)</div>'
+    hint = ""
+    if not re.fullmatch(r"[A-Za-z]{16}", app_password or ""):
+        hint = ("<br>• What you entered is not 16 letters — it looks like your normal Gmail password "
+                "or a browser-autofilled value, not an App Password.")
+    return (
+        '<div class="status-line err">❌ Gmail rejected the login (invalid credentials). '
+        'This is a Google-side credentials issue, not an app bug. Common causes:'
+        f'{hint}'
+        '<br>• The App Password was deleted, or your Google account password was changed '
+        '(Google then revokes ALL old App Passwords).'
+        '<br>• The Gmail address above is not the same account the App Password was created in.'
+        '<br>• Your browser auto-filled a saved password into the App Password box.'
+        '<br>Fix: create a new one at <a href="https://myaccount.google.com/apppasswords" '
+        'target="_blank" rel="noopener">myaccount.google.com/apppasswords</a> (2-Step Verification '
+        'must be ON) and paste it here.</div>'
+    )
+
+
 def check_replies(sender_email, app_password, emails_state=None):
     """
     Scans the mailbox for genuine replies (Re: subject, or In-Reply-To/References
@@ -637,6 +672,7 @@ def check_replies(sender_email, app_password, emails_state=None):
     reply-forwarding often land there). Falls back to INBOX on non-Gmail servers.
     Opened read-only with BODY.PEEK, so nothing gets marked as read.
     """
+    sender_email, app_password = _clean_gmail_credentials(sender_email, app_password)
     if not sender_email or not app_password:
         return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
 
@@ -671,7 +707,7 @@ def check_replies(sender_email, app_password, emails_state=None):
         except Exception:
             pass
     except imaplib.IMAP4.error as ex:
-        return f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
+        return _gmail_auth_error_html(ex, app_password)
     except Exception as ex:
         return f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
 
@@ -993,6 +1029,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
         return _fail('<div class="status-line err">⚠ Enter the position you are hiring for.</div>')
     if not _parse_skill_list(skills_text):
         return _fail('<div class="status-line err">⚠ Enter at least one required skill (comma separated).</div>')
+    gmail_address, app_password = _clean_gmail_credentials(gmail_address, app_password)
     if not gmail_address or not app_password:
         return _fail('<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>')
 
@@ -1010,9 +1047,11 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
         ids = data[0].split()[-limit:]
         for msg_id in reversed(ids):
             status, msg_data = imap.fetch(msg_id, "(RFC822)")
-            if not msg_data or not msg_data[0]:
+            raw = next((it[1] for it in (msg_data or [])
+                        if isinstance(it, tuple) and len(it) >= 2 and isinstance(it[1], (bytes, bytearray))), None)
+            if not raw:
                 continue
-            msg = email_lib.message_from_bytes(msg_data[0][1])
+            msg = email_lib.message_from_bytes(raw)
             subject = _decode_mime_header(msg.get("Subject", "") or "")
             body = _extract_plain_body(msg)
             attachment_name, attachment_text = _extract_attachment_text(msg)
@@ -1056,7 +1095,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
             candidates.append(result)
         imap.logout()
     except imaplib.IMAP4.error as ex:
-        return _fail(f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>')
+        return _fail(_gmail_auth_error_html(ex, app_password))
     except Exception as ex:
         return _fail(f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>')
 
