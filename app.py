@@ -28,6 +28,7 @@ import email.header
 import smtplib
 import requests
 import zipfile
+import urllib.parse
 from io import BytesIO
 from collections import Counter
 from email.mime.multipart import MIMEMultipart
@@ -635,26 +636,35 @@ def _clean_gmail_credentials(address, app_password):
     return addr, pw
 
 
-def _gmail_auth_error_html(ex, app_password):
-    """Friendly explanation for a rejected Gmail IMAP login."""
+def _gmail_auth_error_html(ex, app_password, gmail_address=""):
+    """Friendly explanation for a rejected Gmail IMAP login. Shows exactly which
+    address and (masked) App Password were sent to Google, so the HR can spot an
+    address/account mismatch or a stale browser-autofilled password at a glance."""
     raw = str(ex)
     if "AUTHENTICATIONFAILED" not in raw.upper() and "INVALID CREDENTIALS" not in raw.upper():
         return f'<div class="status-line err">❌ IMAP error: {_html.escape(raw)} (check the App Password)</div>'
+    pw = app_password or ""
+    masked = (pw[:2] + "•" * max(len(pw) - 4, 0) + pw[-2:]) if len(pw) > 4 else "•" * len(pw)
+    addr = (gmail_address or "").strip()
+    addr_q = urllib.parse.quote(addr)
     hint = ""
-    if not re.fullmatch(r"[A-Za-z]{16}", app_password or ""):
-        hint = ("<br>• What you entered is not 16 letters — it looks like your normal Gmail password "
+    if not re.fullmatch(r"[A-Za-z]{16}", pw):
+        hint = ("<br>• What was sent is not 16 letters — it looks like your normal Gmail password "
                 "or a browser-autofilled value, not an App Password.")
     return (
-        '<div class="status-line err">❌ Gmail rejected the login (invalid credentials). '
-        'This is a Google-side credentials issue, not an app bug. Common causes:'
+        '<div class="status-line err">❌ Gmail rejected the login (invalid credentials).'
+        f'<br><b>Sent to Google →</b> Gmail address: <b>{_html.escape(addr)}</b> · '
+        f'App Password: <b>{_html.escape(masked)}</b> ({len(pw)} characters)'
+        '<br>Check that the first 2 and last 2 letters above match the App Password you just created, '
+        'and that the address is exactly the account you created it in.'
         f'{hint}'
-        '<br>• The App Password was deleted, or your Google account password was changed '
-        '(Google then revokes ALL old App Passwords).'
-        '<br>• The Gmail address above is not the same account the App Password was created in.'
-        '<br>• Your browser auto-filled a saved password into the App Password box.'
-        '<br>Fix: create a new one at <a href="https://myaccount.google.com/apppasswords" '
-        'target="_blank" rel="noopener">myaccount.google.com/apppasswords</a> (2-Step Verification '
-        'must be ON) and paste it here.</div>'
+        '<br>• If you are signed in to several Google accounts in this browser, the App Passwords page '
+        'often opens a DIFFERENT account. Use this link — it opens the page for exactly this address: '
+        f'<a href="https://myaccount.google.com/apppasswords?authuser={addr_q}" target="_blank" '
+        f'rel="noopener">App Passwords for {_html.escape(addr)}</a>'
+        '<br>• Changing your Google account password revokes ALL App Passwords — create a fresh one after it.'
+        '<br>• If Gmail sent you a "Sign-in attempt blocked / Critical security alert" email, open it and '
+        'confirm "Yes, it was me", then try again.</div>'
     )
 
 
@@ -707,7 +717,7 @@ def check_replies(sender_email, app_password, emails_state=None):
         except Exception:
             pass
     except imaplib.IMAP4.error as ex:
-        return _gmail_auth_error_html(ex, app_password)
+        return _gmail_auth_error_html(ex, app_password, sender_email)
     except Exception as ex:
         return f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
 
@@ -1117,7 +1127,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
             candidates.append(result)
         imap.logout()
     except imaplib.IMAP4.error as ex:
-        return _fail(_gmail_auth_error_html(ex, app_password))
+        return _fail(_gmail_auth_error_html(ex, app_password, gmail_address))
     except Exception as ex:
         return _fail(f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>')
 
@@ -1188,6 +1198,20 @@ def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, compa
     return status_html, updated_state, render_emails(updated_state)
 
 
+def _no_autofill(value):
+    """Textbox kwargs that stop the browser's password manager from silently filling
+    an old saved password/email into the credential boxes. Only used when the
+    installed Gradio supports it, so older Gradio versions keep working unchanged."""
+    try:
+        import inspect
+        if (hasattr(gr, "InputHTMLAttributes")
+                and "html_attributes" in inspect.signature(gr.Textbox.__init__).parameters):
+            return {"html_attributes": gr.InputHTMLAttributes(autocomplete=value)}
+    except Exception:
+        pass
+    return {}
+
+
 # --------------------------------------------------------------------------- #
 # Layout
 # --------------------------------------------------------------------------- #
@@ -1226,8 +1250,9 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             "`myaccount.google.com/apppasswords` (requires 2-Step Verification to be ON)."
         )
         with gr.Row():
-            gmail_email_in = gr.Textbox(label="Gmail address", placeholder="you@gmail.com")
-            gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
+            gmail_email_in = gr.Textbox(label="Gmail address", placeholder="you@gmail.com", **_no_autofill("off"))
+            gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx",
+                                                **_no_autofill("new-password"))
 
     with gr.Accordion("📧 Brevo sender details — used to actually send emails (never saved)", open=False):
         gr.Markdown(
@@ -1242,7 +1267,8 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         with gr.Row():
             sender_email_in = gr.Textbox(label="Sender email (verified in Brevo)", placeholder="you@example.com")
             sender_name_in = gr.Textbox(label="Sender name", placeholder="HR Team", value="HR Team")
-        brevo_key_in = gr.Textbox(label="Brevo API Key", type="password", placeholder="xkeysib-...")
+        brevo_key_in = gr.Textbox(label="Brevo API Key", type="password", placeholder="xkeysib-...",
+                                 **_no_autofill("new-password"))
 
     stats_out = gr.HTML()
 
