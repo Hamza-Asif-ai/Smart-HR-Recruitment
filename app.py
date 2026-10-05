@@ -486,59 +486,190 @@ def _extract_plain_body(msg) -> str:
         return ""
 
 
+_REPLY_SCAN_LIMIT = 200  # newest N messages scanned per mailbox (headers only, so this is fast)
+_REPLY_HEADER_FIELDS = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])"
+
+
+def _imap_special_folder(imap, flag):
+    """Return the (quoted) name of the mailbox carrying a special-use flag such as
+    \\All (Gmail's "All Mail") or \\Junk (Spam), or None if the server has none.
+    Looked up by flag, not by name, because Gmail localises folder names."""
+    try:
+        status, boxes = imap.list()
+    except Exception:
+        return None
+    if status != "OK" or not boxes:
+        return None
+    for raw in boxes:
+        if not raw or isinstance(raw, tuple):
+            continue
+        line = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
+        m = re.match(r'\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$', line.strip())
+        if not m:
+            continue
+        if flag.lower() in m.group("flags").lower().split():
+            name = m.group("name").strip()
+            if not name.startswith('"'):
+                name = f'"{name}"'
+            return name
+    return None
+
+
+def _imap_fetch_items(resp):
+    """Yield (uid, payload_bytes) from a UID FETCH response. Robust to the extra
+    flag-update lines Gmail can interleave in the response list."""
+    for item in resp or []:
+        if not (isinstance(item, tuple) and len(item) >= 2):
+            continue
+        meta = item[0].decode("utf-8", errors="ignore") if isinstance(item[0], bytes) else str(item[0])
+        m = re.search(r"UID (\d+)", meta)
+        if m and isinstance(item[1], (bytes, bytearray)):
+            yield m.group(1), bytes(item[1])
+
+
+def _reply_body_text(msg) -> str:
+    """Plain-text body of a reply; falls back to the HTML part (tags stripped)
+    for mail apps that only send HTML."""
+    if msg.is_multipart() or msg.get_content_type() != "text/html":
+        body = _extract_plain_body(msg).strip()
+        if body:
+            return body
+    for part in (msg.walk() if msg.is_multipart() else [msg]):
+        if part.get_content_type() == "text/html" and not part.get("Content-Disposition"):
+            try:
+                raw_html = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="ignore")
+            except Exception:
+                continue
+            raw_html = re.sub(r"(?is)<(script|style).*?</\1>", " ", raw_html)
+            raw_html = re.sub(r"(?i)<br\s*/?>|</p>|</div>", "\n", raw_html)
+            text = _html.unescape(re.sub(r"<[^>]+>", "", raw_html))
+            return re.sub(r"\n\s*\n+", "\n\n", text).strip()
+    return ""
+
+
+def _date_sort_key(date_str):
+    try:
+        parsed = email.utils.parsedate_tz(date_str or "")
+        return email.utils.mktime_tz(parsed) if parsed else 0
+    except Exception:
+        return 0
+
+
+def _scan_mailbox_for_replies(imap, mailbox, own_addr, candidate_addrs, folder_label):
+    """Scan one mailbox (read-only, nothing is marked as read) for genuine replies."""
+    status, _ = imap.select(mailbox, readonly=True)
+    if status != "OK":
+        return []
+    status, data = imap.uid("SEARCH", None, "ALL")
+    if status != "OK" or not data or not data[0]:
+        return []
+    uids = data[0].split()[-_REPLY_SCAN_LIMIT:]
+    if not uids:
+        return []
+
+    # Pass 1 — headers only (one round-trip) to pick out reply candidates.
+    status, resp = imap.uid("FETCH", b",".join(uids).decode(), _REPLY_HEADER_FIELDS)
+    if status != "OK":
+        return []
+    wanted = []
+    for uid, header_bytes in _imap_fetch_items(resp):
+        hdr = email_lib.message_from_bytes(header_bytes)
+        subject = _decode_mime_header(str(hdr.get("Subject", "") or "")) or "(no subject)"
+        from_addr = email.utils.parseaddr(str(hdr.get("From", "") or ""))[1].lower()
+        if not from_addr or from_addr == own_addr:
+            continue  # our own sent mail (All Mail also contains the Sent folder)
+        threaded = (subject.strip().lower().startswith("re:")
+                    or hdr.get("In-Reply-To") is not None
+                    or hdr.get("References") is not None)
+        if threaded or from_addr in candidate_addrs:
+            wanted.append(uid)
+    if not wanted:
+        return []
+
+    # Pass 2 — full messages only for the shortlisted ones (BODY.PEEK keeps them unread).
+    status, resp = imap.uid("FETCH", ",".join(wanted), "(BODY.PEEK[])")
+    if status != "OK":
+        return []
+    found = []
+    for uid, raw in _imap_fetch_items(resp):
+        msg = email_lib.message_from_bytes(raw)
+        subject = _decode_mime_header(str(msg.get("Subject", "(no subject)") or "")) or "(no subject)"
+        from_addr = email.utils.parseaddr(str(msg.get("From", "") or ""))[1].lower()
+        # Only real replies — not a candidate's original application email,
+        # which can sit in the same inbox from the same address. A "Re:" subject
+        # or threading headers are the normal signal; if we know for certain we
+        # invited this address this session, a message from them that does NOT
+        # itself look like a job application (no resume attachment / application
+        # wording) also counts — some mail apps send a fresh message instead of a
+        # true threaded reply, with no "Re:" or In-Reply-To/References header.
+        looks_like_application = (_find_attachment_name(msg) is not None
+                                   or any(k in f"{subject} {_extract_plain_body(msg)}".lower()
+                                          for k in _APPLICATION_KEYWORDS))
+        is_reply = (subject.strip().lower().startswith("re:")
+                    or msg.get("In-Reply-To") is not None
+                    or msg.get("References") is not None
+                    or (from_addr in candidate_addrs and not looks_like_application))
+        if not is_reply:
+            continue
+        found.append({
+            "from": from_addr,
+            "subject": subject,
+            "date": str(msg.get("Date", "") or ""),
+            "body": _reply_body_text(msg)[:600],
+            "invited": from_addr in candidate_addrs,
+            "folder": folder_label,
+            "message_id": str(msg.get("Message-ID", "") or "").strip(),
+        })
+    return found
+
+
 def check_replies(sender_email, app_password, emails_state=None):
     """
-    Scans the inbox for genuine replies (Re: subject, or In-Reply-To/References
+    Scans the mailbox for genuine replies (Re: subject, or In-Reply-To/References
     headers) — independent of whether anything was sent earlier in this browser
     session, since gr.State resets on page reload and shouldn't gate this.
     If emails_state (candidates invited this session) is available, it's used
     only to label which replies came from an invited candidate — never to hide
     results when it's empty.
+
+    Looks in Gmail's "All Mail" (so replies that skipped the Inbox via filters /
+    archiving are still found) plus Spam (replies relayed by Brevo's brevosend.com
+    reply-forwarding often land there). Falls back to INBOX on non-Gmail servers.
+    Opened read-only with BODY.PEEK, so nothing gets marked as read.
     """
     if not sender_email or not app_password:
         return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
 
-    candidate_addrs = {e["to"].lower() for e in (emails_state or [])}
+    own_addr = sender_email.strip().lower()
+    candidate_addrs = {(e.get("to") or "").strip().lower() for e in (emails_state or []) if e.get("to")}
     replies = []
     try:
         imap = imaplib.IMAP4_SSL("imap.gmail.com")
         imap.login(sender_email, app_password)
-        imap.select("INBOX")
-        status, data = imap.search(None, "ALL")
-        ids = data[0].split()[-150:]  # last 150 messages, newest last
-        for msg_id in reversed(ids):
-            status, msg_data = imap.fetch(msg_id, "(RFC822)")
-            if not msg_data or not msg_data[0]:
-                continue
-            raw = msg_data[0][1]
-            msg = email_lib.message_from_bytes(raw)
-            subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
-            from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
-            # Only real replies — not a candidate's original application email,
-            # which can sit in the same inbox from the same address. A "Re:" subject
-            # or threading headers are the normal signal; if we know for certain we
-            # invited this address this session, a message from them that does NOT
-            # itself look like a job application (no resume attachment / application
-            # wording) also counts — some mail apps send a fresh message instead of a
-            # true threaded reply, with no "Re:" or In-Reply-To/References header.
-            looks_like_application = (_find_attachment_name(msg) is not None
-                                       or any(k in f"{subject} {_extract_plain_body(msg)}".lower()
-                                              for k in _APPLICATION_KEYWORDS))
-            is_reply = (subject.strip().lower().startswith("re:")
-                        or msg.get("In-Reply-To") is not None
-                        or msg.get("References") is not None
-                        or (from_addr in candidate_addrs and not looks_like_application))
-            if not is_reply:
-                continue
-            body = _extract_plain_body(msg).strip()
-            replies.append({
-                "from": from_addr,
-                "subject": subject,
-                "date": msg.get("Date", ""),
-                "body": body[:600],
-                "invited": from_addr in candidate_addrs,
-            })
-        imap.logout()
+        all_mail = _imap_special_folder(imap, "\\All")
+        spam = _imap_special_folder(imap, "\\Junk")
+        folders = [(all_mail or "INBOX", "")]
+        if spam:
+            folders.append((spam, "Spam"))
+        seen = set()
+        for mailbox, label in folders:
+            try:
+                found = _scan_mailbox_for_replies(imap, mailbox, own_addr, candidate_addrs, label)
+            except imaplib.IMAP4.error:
+                if mailbox == "INBOX":
+                    raise
+                # If a special folder can't be opened, fall back to the plain inbox.
+                found = _scan_mailbox_for_replies(imap, "INBOX", own_addr, candidate_addrs, label)
+            for r in found:
+                key = r["message_id"] or (r["from"], r["subject"], r["date"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                replies.append(r)
+        try:
+            imap.logout()
+        except Exception:
+            pass
     except imaplib.IMAP4.error as ex:
         return f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
     except Exception as ex:
@@ -547,9 +678,12 @@ def check_replies(sender_email, app_password, emails_state=None):
     if not replies:
         return '<div class="empty-state">No replies found in the inbox yet.</div>'
 
+    replies.sort(key=lambda r: _date_sort_key(r["date"]), reverse=True)  # newest first
     cards = []
     for r in replies:
         badge = '<span class="attach-chip">✓ invited this session</span>' if r["invited"] else ""
+        if r.get("folder"):
+            badge += f' <span class="attach-chip">⚠ found in {_html.escape(r["folder"])}</span>'
         cards.append(f"""
         <div class="reply-card">
           <span class="reply-date">{_html.escape(r['date'])}</span>
