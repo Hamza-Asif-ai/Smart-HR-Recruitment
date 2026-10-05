@@ -1012,11 +1012,13 @@ def _recommendation_for(match):
     return "Weak match - likely reject"
 
 
-def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text, min_years, limit=60):
+def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text, min_years, limit=None):
     """
     Scans the given Gmail inbox for candidate application emails, reads each
     resume (PDF/TXT attachment text, else the email body) and scores it against
     the position / skills / experience the HR entered in the UI.
+    Every email in the inbox whose SUBJECT contains the job title is included
+    (limit=None scans the whole inbox; pass a number to scan only the newest N).
     """
     empty_state = {"title": "", "candidates": []}
     empty_stats = _stats_html_for([])
@@ -1040,31 +1042,51 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     try:
         imap = imaplib.IMAP4_SSL("imap.gmail.com")
         imap.login(gmail_address, app_password)
-        imap.select("INBOX")
-        position_words = _position_words(requirements["title"])
-        total_found = 0
-        status, data = imap.search(None, "ALL")
-        ids = data[0].split()[-limit:]
-        for msg_id in reversed(ids):
-            status, msg_data = imap.fetch(msg_id, "(RFC822)")
-            raw = next((it[1] for it in (msg_data or [])
-                        if isinstance(it, tuple) and len(it) >= 2 and isinstance(it[1], (bytes, bytearray))), None)
-            if not raw:
+        imap.select("INBOX", readonly=True)  # read-only: scanning never marks emails as read
+        # Words that identify the job title ("Digital Marketing Specialist" ->
+        # digital, marketing, specialist). Matched as word starts so "Engineer"
+        # also matches "Engineers"/"Engineering". If the title is only filler
+        # words (e.g. "Intern"), the title's own words are used as-is.
+        title_words = (_position_words(requirements["title"])
+                       or re.findall(r"[a-z0-9]+", requirements["title"].lower()))
+        title_patterns = [re.compile(r"\b" + re.escape(w)) for w in title_words]
+        own_addr = gmail_address.lower()
+
+        # Pass 1 — headers only, for the WHOLE inbox (not just the latest few):
+        # keep every email whose SUBJECT contains the job title.
+        status, data = imap.uid("SEARCH", None, "ALL")
+        all_uids = data[0].split() if status == "OK" and data and data[0] else []
+        if limit:
+            all_uids = all_uids[-limit:]
+        matched_uids, other_role = [], 0
+        for i in range(0, len(all_uids), 300):
+            chunk = b",".join(all_uids[i:i + 300]).decode()
+            status, resp = imap.uid("FETCH", chunk, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+            if status != "OK":
                 continue
+            for uid, header_bytes in _imap_fetch_items(resp):
+                hdr = email_lib.message_from_bytes(header_bytes)
+                subj_l = _decode_mime_header(str(hdr.get("Subject", "") or "")).lower()
+                hdr_from = email.utils.parseaddr(str(hdr.get("From", "") or ""))[1].lower()
+                if hdr_from == own_addr or "interview invitation" in subj_l:
+                    continue  # our own mail, or a candidate's reply to an interview invite
+                if title_patterns and all(pt.search(subj_l) for pt in title_patterns):
+                    matched_uids.append(uid)
+                elif any(k in subj_l for k in _APPLICATION_KEYWORDS):
+                    other_role += 1  # an application, but for a different role
+        total_found = len(matched_uids) + other_role
+
+        # Pass 2 — full message (resume attachment / body) only for the matches.
+        fetched = []
+        for i in range(0, len(matched_uids), 25):
+            status, resp = imap.uid("FETCH", ",".join(matched_uids[i:i + 25]), "(BODY.PEEK[])")
+            if status == "OK":
+                fetched.extend(_imap_fetch_items(resp))
+        for _uid, raw in fetched:
             msg = email_lib.message_from_bytes(raw)
             subject = _decode_mime_header(msg.get("Subject", "") or "")
             body = _extract_plain_body(msg)
             attachment_name, attachment_text = _extract_attachment_text(msg)
-            blob = f"{subject} {body}".lower()
-            has_attachment = _find_attachment_name(msg) is not None
-            if not (has_attachment or any(k in blob for k in _APPLICATION_KEYWORDS)):
-                continue
-            total_found += 1
-            # The position itself must actually be mentioned in the email (subject or
-            # body) — e.g. "Software Engineer" applicants only, not every applicant who
-            # happens to share a skill or two with the role.
-            if position_words and not all(w in blob for w in position_words):
-                continue
 
             from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
             from_name = _decode_mime_header(from_name)
@@ -1103,11 +1125,12 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
 
     if not candidates:
         if total_found == 0:
-            msg = '<div class="empty-state">No candidate application emails detected in this inbox.</div>'
+            msg = (f'<div class="empty-state">No emails with “{_html.escape(requirements["title"])}” '
+                   f'in the subject were found in this inbox.</div>')
         else:
             msg = (f'<div class="status-line err">⚠ Found {total_found} application email(s) in the inbox, but none '
-                   f'mention "{_html.escape(requirements["title"])}" — they look like applications for a '
-                   f'different role.</div>')
+                   f'have "{_html.escape(requirements["title"])}" in the subject — they look like applications '
+                   f'for a different role.</div>')
         return _stats_html_for([]), msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
 
     candidates.sort(key=lambda c: c["match_percent"], reverse=True)
