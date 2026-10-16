@@ -318,10 +318,10 @@ def render_emails(emails):
     cards = []
     for e in emails:
         fallback = e["to"].split("@")[0].replace(".", " ").title()
-        name = _extract_first_name(e.get("body", ""), fallback)
+        name = (e.get("candidate") or "").strip() or _extract_first_name(e.get("body", ""), fallback)
         initials = "".join([p[0].upper() for p in name.split()[:2]]) or "?"
         subject = _html.escape(e["subject"])
-        body = _html.escape(e["body"])
+        body = _bold_inline(e.get("body_md") or e["body"])
         to_addr = _html.escape(e["to"])
         cards.append(f"""
         <div class="email-card">
@@ -433,6 +433,8 @@ def send_all_emails(sender_email, sender_name, brevo_api_key, emails_state):
             "subject": e["subject"],
             "textContent": e["body"],
         }
+        if e.get("html"):
+            payload["htmlContent"] = e["html"]
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=20)
             if resp.status_code in (200, 201):
@@ -810,61 +812,136 @@ def build_custom_requirements(position, skills_text, nice_text, min_years):
     }
 
 
-DEFAULT_INVITE_BODY = (
-    "Thank you for applying for the {position} position at {company}. "
+DEFAULT_INVITE_TEMPLATE = (
+    "Dear {First Name},\n\n"
+    "Thank you for applying for the {Job Title} position at {Company Name}. "
     "After reviewing your application, we were impressed by your experience "
-    "with {skills} and would like to invite you to an interview.\n\n"
-    "Proposed slot: {slot}\n"
+    "with {Skills} and would like to invite you to an interview.\n\n"
+    "Proposed slot: {Slot}\n"
     "Format: 45-minute video call\n\n"
     "Please reply to confirm whether this time works, or suggest an "
     "alternative that suits you better.\n\n"
-    "We look forward to speaking with you."
+    "We look forward to speaking with you.\n\n"
+    "Best regards,\n{Sender Name}\nTalent Acquisition, {Company Name}"
 )
 
-_INVITE_PLACEHOLDERS = ("name", "full_name", "position", "company", "skills", "slot", "recruiter")
+CUSTOM_INVITE_SAMPLE = (
+    "Dear {Candidate Name},\n\n"
+    "We are pleased to inform you that you have been shortlisted for an interview for the "
+    "position of **{Job Title}** at **{Company Name}**.\n\n"
+    "Please find the interview details below:\n\n"
+    "**Date:** [Date]\n"
+    "**Time:** [Time]\n"
+    "**Location:** [Location], {Company Name}\n"
+    "**Interview Mode:** [Mode]\n\n"
+    "Kindly confirm your availability by replying to this email. Please arrive a few minutes "
+    "early. We also recommend bringing an updated copy of your CV.\n\n"
+    "We look forward to meeting you and discussing your qualifications, skills, and potential "
+    "contribution to our team.\n\n"
+    "Best regards,\n**{Sender Name}**\n{Company Name}\n{Official Email Address}"
+)
+_SAMPLE_BLANKS = ("[Date]", "[Time]", "[Location]", "[Mode]")
+
+# {Placeholders} are matched case-insensitively; spaces / "_" / "-" are interchangeable.
+_PLACEHOLDER_RE = re.compile(r"\{\s*([A-Za-z][A-Za-z0-9 _\-]*?)\s*\}")
+_PLACEHOLDER_ALIASES = {
+    "candidate name": "candidate_name", "full name": "candidate_name", "candidate": "candidate_name",
+    "first name": "first_name", "name": "first_name",
+    "job title": "position", "position": "position", "role": "position", "job": "position",
+    "company name": "company", "company": "company",
+    "skills": "skills", "matched skills": "skills",
+    "slot": "slot", "interview slot": "slot",
+    "sender name": "recruiter", "recruiter": "recruiter", "recruiter name": "recruiter",
+    "official email address": "sender_email", "official email": "sender_email",
+    "sender email": "sender_email", "email address": "sender_email",
+}
+PLACEHOLDERS_HELP = ("{Candidate Name}, {First Name}, {Job Title}, {Company Name}, {Sender Name}, "
+                     "{Official Email Address}, {Skills}, {Slot}")
+
+
+def _norm_placeholder(raw):
+    return re.sub(r"[\s_\-]+", " ", raw.strip().lower())
 
 
 def _unknown_placeholders(template):
-    """{word} tokens in the HR's template that are not one of the supported placeholders."""
-    found = re.findall(r"\{(\w+)\}", template or "")
-    return sorted({f for f in found if f not in _INVITE_PLACEHOLDERS})
+    """{Word} tokens in the HR's text that are not a supported placeholder (typos etc.)."""
+    out = []
+    for raw in _PLACEHOLDER_RE.findall(template or ""):
+        if _norm_placeholder(raw) not in _PLACEHOLDER_ALIASES and raw not in out:
+            out.append(raw)
+    return out
 
 
 def _fill_invite_template(template, values):
-    out = template
-    for key, val in values.items():
-        out = out.replace("{" + key + "}", val)
+    def repl(m):
+        key = _PLACEHOLDER_ALIASES.get(_norm_placeholder(m.group(1)))
+        if key is None:
+            return m.group(0)
+        return str(values.get(key, "")).replace("**", "")   # values must never inject bold markers
+    out = _PLACEHOLDER_RE.sub(repl, template)
     # "Acme Ltd." followed by the template's own "." would print "Acme Ltd.." — collapse it
     # (a real "..." ellipsis is left alone).
     return re.sub(r"(?<!\.)\.\.(?!\.)", ".", out)
 
 
-def _draft_invitation(candidate, position, company, recruiter, slot, body_template=None):
-    """Interview invitation. The greeting and signature are automatic; the middle part
-    comes from `body_template` (HR-editable, with {placeholders}) or the default text."""
+def _bold_inline(text):
+    """HTML-escape `text`, then turn **bold** into <strong>bold</strong> (newlines untouched)."""
+    return re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<strong>\1</strong>", _html.escape(text))
+
+
+def _email_html(text_md):
+    """HTML version of the email for Gmail & co.: paragraphs, line breaks, **bold**."""
+    paras = re.split(r"\n\s*\n", text_md.strip())
+    out = []
+    for para in paras:
+        lines = [_bold_inline(line.rstrip()) for line in para.split("\n")]
+        out.append('<p style="margin:0 0 14px 0;">' + "<br>".join(lines) + "</p>")
+    return ('<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+            'line-height:1.55;color:#222;">' + "".join(out) + "</div>")
+
+
+def _check_invite_template(mode, template):
+    """Problem with the custom text (as a plain-text message), or None if it is fine."""
+    if mode != "custom":
+        return None
+    t = (template or "").strip()
+    if not t:
+        return "your custom email text is empty — write your email, or switch to “Use the default text”."
+    bad = _unknown_placeholders(t)
+    if bad:
+        shown = ", ".join("{" + b + "}" for b in bad)
+        return f"unknown placeholder(s) {shown}. Allowed: {PLACEHOLDERS_HELP}."
+    left = [b for b in _SAMPLE_BLANKS if b in t]
+    if left:
+        return f"{', '.join(left)} are still the sample blanks — replace them with the real interview details."
+    return None
+
+
+def _draft_invitation(candidate, position, company, recruiter, slot, body_template=None, sender_email=""):
+    """Whole email (greeting → signature) from the default template, or from the HR's own
+    `body_template`. {Placeholders} are filled from the form; **text** becomes bold in the
+    HTML part that Gmail shows (the plain-text part just drops the asterisks)."""
     full = (candidate.get("name") or "there").strip()
     first = full.split()[0]
     strengths = candidate.get("matched_required") or candidate.get("skills") or []
-    strengths_str = ", ".join(strengths[:3]) if strengths else "your background"
     company = (company or "").strip() or "our company"
     recruiter = (recruiter or "").strip() or "HR Team"
     slot = re.sub(r"\s+IST$", "", slot or "").strip()
 
-    template = (body_template or "").replace("\r\n", "\n").strip() or DEFAULT_INVITE_BODY
-    middle = _fill_invite_template(template, {
-        "name": first, "full_name": full, "position": position, "company": company,
-        "skills": strengths_str, "slot": slot, "recruiter": recruiter,
+    template = (body_template or "").replace("\r\n", "\n").strip() or DEFAULT_INVITE_TEMPLATE
+    filled = _fill_invite_template(template, {
+        "candidate_name": full, "first_name": first, "position": position, "company": company,
+        "skills": ", ".join(strengths[:3]) if strengths else "your background",
+        "slot": slot, "recruiter": recruiter, "sender_email": (sender_email or "").strip(),
     })
-    body = (
-        f"Dear {first},\n\n"
-        f"{middle}\n\n"
-        f"Best regards,\n{recruiter}\nTalent Acquisition, {company}"
-    )
+    body_md = "\n".join(line.rstrip() for line in filled.split("\n"))
     return {
         "to": candidate.get("email", ""),
         "candidate": candidate.get("name", ""),
         "subject": f"Interview Invitation - {position} at {company}",
-        "body": body,
+        "body": body_md.replace("**", ""),     # plain-text part
+        "body_md": body_md,                    # with **markers**, for the in-app card
+        "html": _email_html(body_md),          # HTML part (bold etc.)
         "slot": slot,
     }
 
@@ -999,20 +1076,18 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
             gr.update(choices=choice_tuples, value=[]), state, render_application_email_cards(candidates))
 
 
-def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, company, invite_body,
+def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, company, invite_mode, invite_body,
                                  selected_emails, inbox_state, sent_invitations_state):
     sent_invitations_state = sent_invitations_state or []
     if not selected_emails:
         return ('<div class="status-line err">⚠ Select at least one candidate first (checkboxes above).</div>',
                 sent_invitations_state, render_emails(sent_invitations_state))
 
-    bad = _unknown_placeholders(invite_body)
-    if bad:
-        shown = ", ".join("{" + b + "}" for b in bad)
-        allowed = ", ".join("{" + k + "}" for k in _INVITE_PLACEHOLDERS)
-        return (f'<div class="status-line err">⚠ Nothing was sent — your email content has unknown '
-                f'placeholder(s): {_html.escape(shown)}. Allowed: {_html.escape(allowed)}.</div>',
+    problem = _check_invite_template(invite_mode, invite_body)
+    if problem:
+        return (f'<div class="status-line err">⚠ Nothing was sent — {_html.escape(problem)}</div>',
                 sent_invitations_state, render_emails(sent_invitations_state))
+    template = invite_body if invite_mode == "custom" else None
 
     candidates = (inbox_state or {}).get("candidates", [])
     title = (inbox_state or {}).get("title") or "the role"
@@ -1025,7 +1100,7 @@ def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, compa
         if not c:
             continue
         slot = slots[i] if i < len(slots) else ""
-        drafts.append(_draft_invitation(c, title, company, sender_name, slot, invite_body))
+        drafts.append(_draft_invitation(c, title, company, sender_name, slot, template, sender_email))
 
     if not drafts:
         return ('<div class="status-line err">⚠ Could not match the selected candidates — try scanning the inbox again.</div>',
@@ -1066,17 +1141,26 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     with gr.Row():
         skills_in = gr.Textbox(label="Required skills (comma separated)", lines=2, scale=3)
         nice_in = gr.Textbox(label="Nice-to-have skills (optional)", lines=2, scale=2)
-    with gr.Accordion("✉️ Customize the invitation email (optional)", open=False):
-        gr.Markdown(
-            "Edit the **middle part** of the email below. The greeting (\"Dear …\") and the signature "
-            "are added automatically, and the **Company name** above is filled in wherever you use "
-            "`{company}`.\n\n"
-            "Placeholders: `{name}` first name · `{full_name}` · `{position}` · `{company}` · "
-            "`{skills}` candidate's top matched skills · `{slot}` proposed interview time · "
-            "`{recruiter}` sender name"
+    with gr.Accordion("✉️ Invitation email — default text or your own", open=False):
+        invite_mode_in = gr.Radio(
+            choices=[("Use the default text", "default"), ("Use my own custom text", "custom")],
+            value="default", label="Which text should the invitation use?",
         )
-        invite_body_in = gr.Textbox(label="Email content", value=DEFAULT_INVITE_BODY, lines=10)
-        reset_body_btn = gr.Button("↺ Reset to default text", size="sm")
+        with gr.Column(visible=False) as custom_invite_box:
+            gr.Markdown(
+                "Write the **whole email**, greeting to signature. Put words between `**double asterisks**` "
+                "to make them **bold** — they arrive bold in Gmail too.\n\n"
+                "These are filled in automatically from the form: `{Candidate Name}` · `{First Name}` · "
+                "`{Job Title}` · `{Company Name}` · `{Sender Name}` · `{Official Email Address}` "
+                "(your verified Brevo sender email) · `{Skills}` (candidate's top matched skills) · "
+                "`{Slot}` (auto-suggested interview time).\n\n"
+                "Replace `[Date]`, `[Time]`, `[Location]`, `[Mode]` with the real interview details "
+                "(nothing is sent while they are still there)."
+            )
+            invite_body_in = gr.Textbox(label="Custom email text", value=CUSTOM_INVITE_SAMPLE, lines=20)
+            reset_body_btn = gr.Button("↺ Reset to the sample", size="sm")
+        with gr.Accordion("See the default text", open=False):
+            gr.Textbox(label="Default email text", value=DEFAULT_INVITE_TEMPLATE, lines=14, interactive=False)
 
     with gr.Accordion("📧 Gmail inbox access — enter YOUR OWN Gmail (used for Applications + Replies tabs, never saved)", open=False):
         gr.Markdown(
@@ -1155,11 +1239,13 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         outputs=[stats_out, applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state, applications_cards_out],
     )
 
-    reset_body_btn.click(lambda: DEFAULT_INVITE_BODY, inputs=None, outputs=[invite_body_in])
+    reset_body_btn.click(lambda: CUSTOM_INVITE_SAMPLE, inputs=None, outputs=[invite_body_in])
+    invite_mode_in.change(lambda m: gr.update(visible=(m == "custom")),
+                          inputs=[invite_mode_in], outputs=[custom_invite_box])
 
     send_selected_btn.click(
         fn=send_invitations_to_selected,
-        inputs=[sender_email_in, sender_name_in, brevo_key_in, company_in, invite_body_in, candidate_checkbox, inbox_state, sent_invitations_state],
+        inputs=[sender_email_in, sender_name_in, brevo_key_in, company_in, invite_mode_in, invite_body_in, candidate_checkbox, inbox_state, sent_invitations_state],
         outputs=[send_selected_status, sent_invitations_state, emails_out],
     )
 
