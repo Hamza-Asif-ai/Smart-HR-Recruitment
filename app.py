@@ -488,14 +488,28 @@ def _extract_plain_body(msg) -> str:
         return ""
 
 
+_INVITE_SUBJECT = "interview invitation"      # every invitation this app sends starts with this
+
+
+def _core_subject(subject):
+    """'RE: Re: Interview Invitation - X' -> 'interview invitation - x'."""
+    t = (subject or "").strip().lower()
+    while True:
+        m = re.match(r"(?:re|aw|sv)\s*:\s*", t)
+        if not m:
+            return t
+        t = t[m.end():]
+
+
 def check_replies(sender_email, app_password, emails_state=None):
     """
-    Scans the inbox for genuine replies (Re: subject, or In-Reply-To/References
-    headers) — independent of whether anything was sent earlier in this browser
-    session, since gr.State resets on page reload and shouldn't gate this.
-    If emails_state (candidates invited this session) is available, it's used
-    only to label which replies came from an invited candidate — never to hide
-    results when it's empty.
+    Shows ONLY replies to the interview invitations this app sent — never the rest of the inbox.
+    A message counts when
+      - it is a reply ("Re:" subject or In-Reply-To/References header) whose subject is one of
+        our "Interview Invitation - ..." subjects — this works even after a page reload, when
+        the in-browser list of invited candidates (emails_state) is gone; or
+      - it comes from an address invited in this session and is not itself a job application
+        (covers a candidate who changed the subject or replied with a fresh message).
     """
     if not sender_email or not app_password:
         return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
@@ -517,27 +531,17 @@ def check_replies(sender_email, app_password, emails_state=None):
             subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
             from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
             body = _extract_plain_body(msg).strip()
-            # Only real replies — not a candidate's original application email, which
-            # can sit in the same inbox from the same address. Several independent
-            # signals count, since not every mail app sets all of them:
-            #  - "Re:" subject, or proper In-Reply-To/References threading headers
-            #  - a quoted-reply marker in the body ("On ... wrote:", or "> " quote
-            #    lines) — present whenever a client quotes the original message,
-            #    even when it skips the "Re:" prefix
-            #  - a message from an address we invited this session that doesn't
-            #    itself look like a job application (no resume attachment / wording)
-            has_quote_marker = (re.search(r"\bOn\b.{0,80}\bwrote:", body, re.IGNORECASE) is not None
-                                 or re.search(r"^\s*>", body, re.MULTILINE) is not None
-                                 or re.search(r"\bwrote:\s*$", body, re.IGNORECASE | re.MULTILINE) is not None)
-            looks_like_application = (_find_attachment_name(msg) is not None
-                                       or any(k in f"{subject} {body}".lower()
-                                              for k in _APPLICATION_KEYWORDS))
-            is_reply = (subject.strip().lower().startswith("re:")
-                        or msg.get("In-Reply-To") is not None
-                        or msg.get("References") is not None
-                        or has_quote_marker
-                        or (from_addr in candidate_addrs and not looks_like_application))
-            if not is_reply:
+            is_reply_msg = (subject.strip().lower().startswith(("re:", "aw:", "sv:"))
+                            or msg.get("In-Reply-To") is not None
+                            or msg.get("References") is not None)
+            replies_to_invitation = is_reply_msg and _core_subject(subject).startswith(_INVITE_SUBJECT)
+
+            from_invited = from_addr in candidate_addrs
+            looks_like_application = from_invited and (
+                _find_attachment_name(msg) is not None
+                or any(k in f"{subject} {body}".lower() for k in _APPLICATION_KEYWORDS))
+
+            if not (replies_to_invitation or (from_invited and not looks_like_application)):
                 continue
             replies.append({
                 "from": from_addr,
@@ -553,7 +557,7 @@ def check_replies(sender_email, app_password, emails_state=None):
         return f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
 
     if not replies:
-        return '<div class="empty-state">No replies found in the inbox yet.</div>'
+        return '<div class="empty-state">No replies to your interview invitations found yet.</div>'
 
     cards = []
     for r in replies:
@@ -1271,7 +1275,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             emails_out = gr.HTML('<div class="empty-state">No invitations sent yet this session.</div>')
 
         with gr.Tab("📥  Replies"):
-            gr.Markdown("Checks the Gmail inbox above for replies **from the candidates you've invited**.")
+            gr.Markdown("Checks the Gmail inbox above and shows **only the replies to your interview invitations** — the rest of the inbox is ignored.")
             refresh_btn = gr.Button("🔄  Check for Replies", variant="primary")
             replies_out = gr.HTML()
 
