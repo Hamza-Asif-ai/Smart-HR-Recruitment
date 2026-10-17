@@ -917,6 +917,31 @@ def _check_invite_template(mode, template):
     return None
 
 
+def save_default_text(custom_text):
+    """Make the HR's custom text their default. It is kept in THIS browser's localStorage
+    (gr.BrowserState) — never on the server — so every HR has their own default."""
+    problem = _check_invite_template("custom", custom_text)
+    if problem:
+        return (gr.skip(), gr.skip(),
+                f'<div class="status-line err">⚠ Not saved as default — {_html.escape(problem)}</div>')
+    text = custom_text.replace("\r\n", "\n").strip()
+    return (text, text,
+            '<div class="status-line ok">✅ Saved. “Use the default text” now sends this text. '
+            'It is remembered in this browser only.</div>')
+
+
+def restore_default_text():
+    return ("", DEFAULT_INVITE_TEMPLATE,
+            '<div class="status-line info">↺ Default text is back to the original.</div>')
+
+
+def load_saved_default(saved):
+    """On page load: the saved default if there is a valid one, else the built-in text."""
+    if isinstance(saved, str) and saved.strip() and _check_invite_template("custom", saved) is None:
+        return saved
+    return DEFAULT_INVITE_TEMPLATE
+
+
 def _draft_invitation(candidate, position, company, recruiter, slot, body_template=None, sender_email=""):
     """Whole email (greeting → signature) from the default template, or from the HR's own
     `body_template`. {Placeholders} are filled from the form; **text** becomes bold in the
@@ -1077,17 +1102,21 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
 
 
 def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, company, invite_mode, invite_body,
-                                 selected_emails, inbox_state, sent_invitations_state):
+                                 default_text, selected_emails, inbox_state, sent_invitations_state):
     sent_invitations_state = sent_invitations_state or []
     if not selected_emails:
         return ('<div class="status-line err">⚠ Select at least one candidate first (checkboxes above).</div>',
                 sent_invitations_state, render_emails(sent_invitations_state))
 
-    problem = _check_invite_template(invite_mode, invite_body)
+    # "default" sends the default text (the HR's saved one, else the built-in); "custom" sends the box.
+    if invite_mode == "custom":
+        template = invite_body
+    else:
+        template = (default_text or "").strip() or DEFAULT_INVITE_TEMPLATE
+    problem = _check_invite_template("custom", template)
     if problem:
         return (f'<div class="status-line err">⚠ Nothing was sent — {_html.escape(problem)}</div>',
                 sent_invitations_state, render_emails(sent_invitations_state))
-    template = invite_body if invite_mode == "custom" else None
 
     candidates = (inbox_state or {}).get("candidates", [])
     title = (inbox_state or {}).get("title") or "the role"
@@ -1116,6 +1145,15 @@ def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, compa
 # --------------------------------------------------------------------------- #
 with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     sent_invitations_state = gr.State([])
+    # The HR's own default invitation text lives in THEIR browser (localStorage). storage_key and
+    # secret must be fixed: left random they change on every server restart (Render sleeps a lot)
+    # and the saved text would become unreadable.
+    if hasattr(gr, "BrowserState"):
+        saved_default_state = gr.BrowserState(
+            "", storage_key="smart_hr_invite_default_v1",
+            secret=os.environ.get("BROWSER_STATE_SECRET", "smart-hr-invite-template-v1"))
+    else:                                   # very old Gradio: works for this session only
+        saved_default_state = gr.State("")
     inbox_state = gr.State({"title": "", "candidates": []})
 
     gr.HTML("""
@@ -1158,9 +1196,15 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
                 "(nothing is sent while they are still there)."
             )
             invite_body_in = gr.Textbox(label="Custom email text", value=CUSTOM_INVITE_SAMPLE, lines=20)
-            reset_body_btn = gr.Button("↺ Reset to the sample", size="sm")
-        with gr.Accordion("See the default text", open=False):
-            gr.Textbox(label="Default email text", value=DEFAULT_INVITE_TEMPLATE, lines=14, interactive=False)
+            with gr.Row():
+                save_default_btn = gr.Button("⭐ Make this my default text", variant="primary", size="sm")
+                reset_body_btn = gr.Button("↺ Reset to the sample", size="sm")
+        default_save_status = gr.HTML()
+        with gr.Accordion("See / change the default text", open=False):
+            default_text_box = gr.Textbox(
+                label="Default email text (this is what “Use the default text” sends)",
+                value=DEFAULT_INVITE_TEMPLATE, lines=14, interactive=False)
+            restore_default_btn = gr.Button("↺ Restore the original default text", size="sm")
 
     with gr.Accordion("📧 Gmail inbox access — enter YOUR OWN Gmail (used for Applications + Replies tabs, never saved)", open=False):
         gr.Markdown(
@@ -1240,12 +1284,17 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     )
 
     reset_body_btn.click(lambda: CUSTOM_INVITE_SAMPLE, inputs=None, outputs=[invite_body_in])
+    save_default_btn.click(save_default_text, inputs=[invite_body_in],
+                           outputs=[saved_default_state, default_text_box, default_save_status])
+    restore_default_btn.click(restore_default_text, inputs=None,
+                              outputs=[saved_default_state, default_text_box, default_save_status])
+    demo.load(load_saved_default, inputs=[saved_default_state], outputs=[default_text_box])
     invite_mode_in.change(lambda m: gr.update(visible=(m == "custom")),
                           inputs=[invite_mode_in], outputs=[custom_invite_box])
 
     send_selected_btn.click(
         fn=send_invitations_to_selected,
-        inputs=[sender_email_in, sender_name_in, brevo_key_in, company_in, invite_mode_in, invite_body_in, candidate_checkbox, inbox_state, sent_invitations_state],
+        inputs=[sender_email_in, sender_name_in, brevo_key_in, company_in, invite_mode_in, invite_body_in, default_text_box, candidate_checkbox, inbox_state, sent_invitations_state],
         outputs=[send_selected_status, sent_invitations_state, emails_out],
     )
 
