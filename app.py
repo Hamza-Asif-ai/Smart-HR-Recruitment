@@ -992,16 +992,19 @@ def build_custom_requirements(position, skills_text, nice_text, min_years):
 
 
 DEFAULT_INVITE_TEMPLATE = (
-    "Dear {First Name},\n\n"
-    "Thank you for applying for the {Job Title} position at {Company Name}. "
-    "After reviewing your application, we were impressed by your experience "
-    "with {Skills} and would like to invite you to an interview.\n\n"
-    "Proposed slot: {Slot}\n"
-    "Format: 45-minute video call\n\n"
-    "Please reply to confirm whether this time works, or suggest an "
-    "alternative that suits you better.\n\n"
-    "We look forward to speaking with you.\n\n"
-    "Best regards,\n{Sender Name}\nTalent Acquisition, {Company Name}"
+    "Dear {Candidate Name},\n\n"
+    "We are pleased to inform you that you have been shortlisted for an interview for the "
+    "position of **{Job Title}** at **{Company Name}**.\n\n"
+    "Please find the interview details below:\n\n"
+    "**Date:** [Date]\n"
+    "**Time:** [Time]\n"
+    "**Location:** [Location], {Company Name}\n"
+    "**Interview Mode:** [Mode]\n\n"
+    "Kindly confirm your availability by replying to this email. Please arrive a few minutes "
+    "early. We also recommend bringing an updated copy of your CV.\n\n"
+    "We look forward to meeting you and discussing your qualifications, skills, and potential "
+    "contribution to our team.\n\n"
+    "Best regards,\n**{Sender Name}**\n{Company Name}\n{Official Email Address}"
 )
 
 CUSTOM_INVITE_SAMPLE = (
@@ -1414,7 +1417,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     # and the saved text would become unreadable.
     if hasattr(gr, "BrowserState"):
         saved_default_state = gr.BrowserState(
-            "", storage_key="smart_hr_invite_default_v1",
+            "", storage_key="smart_hr_invite_default_v2",
             secret=os.environ.get("BROWSER_STATE_SECRET", "smart-hr-invite-template-v1"))
     else:                                   # very old Gradio: works for this session only
         saved_default_state = gr.State("")
@@ -1440,11 +1443,9 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
       </div>
     """ + creator_credit_html())
 
-    # Show error if GEMINI_API_KEY is missing
+    # Show error only if GEMINI_API_KEY is missing (no success banner when it is present)
     if not os.environ.get("GEMINI_API_KEY"):
         gr.HTML('<div class="status-line err">⚠ GEMINI_API_KEY is missing. The system fell back to the old regex-based pipeline. Set GEMINI_API_KEY to enable agentic features.</div>')
-    else:
-        gr.HTML('<div class="status-line ok">✅ GEMINI_API_KEY detected. Agentic features enabled.</div>')
 
     gr.Markdown("### 🎯 What are you hiring for?  \nCandidates are detected, ranked, shortlisted and recommended against these requirements.")
     with gr.Row():
