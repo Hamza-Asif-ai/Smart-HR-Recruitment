@@ -1551,17 +1551,17 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             refresh_btn = gr.Button("🔄  Check for Replies", variant="primary")
             replies_out = gr.HTML()
 
-        with gr.Tab("🔍 Agent Trace"):
-            gr.Markdown("View agent execution traces for observability.")
-            trace_table = gr.Dataframe(
-                headers=["Agent", "Action", "Tool", "Input Summary", "Output Summary", "Duration (ms)", "Timestamp"],
-                interactive=False,
-                wrap=True,
-            )
-            with gr.Row():
-                refresh_trace_btn = gr.Button("Refresh Trace", variant="secondary")
-                download_trace_btn = gr.Button("Download trace as JSON", variant="primary")
-            trace_download = gr.File(label="Download Trace")
+    with gr.Accordion("🔍 Developer Tools (Agent Trace)", open=False):
+        gr.Markdown("View agent execution traces for observability. Hidden by default for normal users.")
+        trace_table = gr.Dataframe(
+            headers=["Agent", "Action", "Tool", "Input Summary", "Output Summary", "Duration (ms)", "Timestamp"],
+            interactive=False,
+            wrap=True,
+        )
+        with gr.Row():
+            refresh_trace_btn = gr.Button("Refresh Trace", variant="secondary")
+            download_trace_btn = gr.Button("Download trace as JSON", variant="primary")
+        trace_download = gr.File(label="Download Trace")
 
     gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
