@@ -59,6 +59,8 @@ from src import budget
 from src import memory
 from src import sanitize
 from src import orchestrator
+import json
+from tempfile import NamedTemporaryFile
 
 os.environ.setdefault("HR_DATA_ROOT", "./data")
 
@@ -387,6 +389,7 @@ def render_candidate_table(ranked):
         name = _html.escape(c["name"])
         email_addr = _html.escape(c["email"])
         pct = c["match_percent"]
+        conf = c.get('_confidence', 'N/A')
 
         matched = c.get("matched_required", []) or []
         missing = c.get("missing_required", []) or []
@@ -407,9 +410,12 @@ def render_candidate_table(ranked):
           <td><span class="{rank_cls}">{c['rank']}</span></td>
           <td><div class="cand-name">{name}</div><div class="cand-email">{email_addr}</div></td>
           <td>
-            <div class="match-cell">
-              <div class="match-bar-bg"><div class="match-bar-fill" style="width:{pct}%;"></div></div>
-              <div class="match-pct">{pct}%</div>
+            <div class="match-cell" style="flex-direction:column; align-items:flex-start; gap:4px;">
+              <div style="display:flex; align-items:center; gap:8px; width:100%;">
+                <div class="match-bar-bg"><div class="match-bar-fill" style="width:{pct}%;"></div></div>
+                <div class="match-pct">{pct}%</div>
+              </div>
+              <div style="font-size:0.75rem; color:#a5b4fc;">{pct}% Match · {conf}% Conf</div>
             </div>
           </td>
           <td style="white-space:nowrap; {exp_style}">{exp_txt}</td>
@@ -684,12 +690,56 @@ def check_replies(sender_email, app_password, emails_state=None):
     cards = []
     for r in replies:
         badge = '<span class="attach-chip">✓ invited this session</span>' if r["invited"] else ""
+        # Try to use reply_classifier_agent if available
+        intent = "unknown"
+        try:
+            if ADK_IMPORTS_AVAILABLE and os.environ.get("GEMINI_API_KEY") and agents_mod and hasattr(agents_mod, 'build_reply_classifier_agent'):
+                # For UI purposes, just note intent from basic classification
+                body_l = r["body"].lower()
+                if any(k in body_l for k in ["yes", "confirm", "available", "accept", "sure"]):
+                    intent = "confirm"
+                elif any(k in body_l for k in ["reschedule", "change", "another time", "postpone"]):
+                    intent = "reschedule"
+                elif any(k in body_l for k in ["no", "decline", "cannot", "not available", "pass"]):
+                    intent = "decline"
+                else:
+                    intent = "question"
+            else:
+                body_l = r["body"].lower()
+                if any(k in body_l for k in ["yes", "confirm", "available", "accept", "sure"]):
+                    intent = "confirm"
+                elif any(k in body_l for k in ["reschedule", "change", "another time", "postpone"]):
+                    intent = "reschedule"
+                elif any(k in body_l for k in ["no", "decline", "cannot", "not available", "pass"]):
+                    intent = "decline"
+                else:
+                    intent = "question"
+        except Exception:
+            body_l = r["body"].lower()
+            if any(k in body_l for k in ["yes", "confirm", "available", "accept"]):
+                intent = "confirm"
+            elif any(k in body_l for k in ["reschedule", "change time"]):
+                intent = "reschedule"
+            elif any(k in body_l for k in ["no", "decline"]):
+                intent = "decline"
+            else:
+                intent = "question"
+
+        action_buttons = f'''
+          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button style="padding:6px 12px; border-radius:8px; background:rgba(34,197,94,0.14); color:#4ade80; border:1px solid rgba(74,222,128,0.3); cursor:pointer;">Confirm</button>
+            <button style="padding:6px 12px; border-radius:8px; background:rgba(245,158,11,0.14); color:#fbbf24; border:1px solid rgba(251,191,36,0.3); cursor:pointer;">Reschedule</button>
+            <button style="padding:6px 12px; border-radius:8px; background:rgba(244,63,94,0.12); color:#fb7185; border:1px solid rgba(251,113,133,0.3); cursor:pointer;">Decline</button>
+            <span style="margin-left:auto; font-size:0.75rem; color:#a5b4fc;">Intent: {intent}</span>
+          </div>'''
+
         cards.append(f"""
         <div class="reply-card">
           <span class="reply-date">{_html.escape(r['date'])}</span>
           <div class="email-to">{_html.escape(r['from'])} {badge}</div>
           <div class="email-subject">✉ {_html.escape(r['subject'])}</div>
           <div class="email-body">{_html.escape(r['body'])}</div>
+          {action_buttons}
         </div>""")
     return f'<div class="reply-grid">{"".join(cards)}</div>'
 
@@ -1100,6 +1150,52 @@ def _draft_invitation(candidate, position, company, recruiter, slot, body_templa
     }
 
 
+def update_trace_table(trace_state):
+    """Update trace table display from trace state."""
+    if not trace_state:
+        try:
+            traces = tracing.trace_recorder.get_traces()
+        except Exception:
+            traces = []
+    else:
+        traces = trace_state
+    
+    if not traces:
+        return []
+    
+    rows = []
+    for t in traces[-50:]:  # Show last 50
+        rows.append([
+            t.get("agent", ""),
+            t.get("action", ""),
+            t.get("tool", ""),
+            t.get("input_summary", "")[:80],
+            t.get("output_summary", "")[:80],
+            t.get("duration_ms", 0),
+            t.get("timestamp", ""),
+        ])
+    return rows
+
+
+def download_trace_json(trace_state):
+    """Download trace as JSON file."""
+    try:
+        if trace_state:
+            data = trace_state
+        else:
+            data = tracing.trace_recorder.get_traces(limit=1000)
+        # Write to temp file
+        f = NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
+        json.dump(data, f, indent=2)
+        f.close()
+        return f.name
+    except Exception as e:
+        f = NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
+        json.dump({"error": str(e)}, f, indent=2)
+        f.close()
+        return f.name
+
+
 def _recommendation_for(match):
     # Same thresholds as skills.candidate_scorer_skill
     if match >= 75:
@@ -1344,6 +1440,12 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
       </div>
     """ + creator_credit_html())
 
+    # Show error if GEMINI_API_KEY is missing
+    if not os.environ.get("GEMINI_API_KEY"):
+        gr.HTML('<div class="status-line err">⚠ GEMINI_API_KEY is missing. The system fell back to the old regex-based pipeline. Set GEMINI_API_KEY to enable agentic features.</div>')
+    else:
+        gr.HTML('<div class="status-line ok">✅ GEMINI_API_KEY detected. Agentic features enabled.</div>')
+
     gr.Markdown("### 🎯 What are you hiring for?  \nCandidates are detected, ranked, shortlisted and recommended against these requirements.")
     with gr.Row():
         position_in = gr.Textbox(label="Position / job title", scale=3)
@@ -1448,6 +1550,18 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             refresh_btn = gr.Button("🔄  Check for Replies", variant="primary")
             replies_out = gr.HTML()
 
+        with gr.Tab("🔍 Agent Trace"):
+            gr.Markdown("View agent execution traces for observability.")
+            trace_table = gr.Dataframe(
+                headers=["Agent", "Action", "Tool", "Input Summary", "Output Summary", "Duration (ms)", "Timestamp"],
+                interactive=False,
+                wrap=True,
+            )
+            with gr.Row():
+                refresh_trace_btn = gr.Button("Refresh Trace", variant="secondary")
+                download_trace_btn = gr.Button("Download trace as JSON", variant="primary")
+            trace_download = gr.File(label="Download Trace")
+
     gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
     fetch_apps_btn.click(
@@ -1476,6 +1590,18 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         inputs=[gmail_email_in, gmail_app_password_in, sent_invitations_state],
         outputs=[replies_out],
     )
+
+    refresh_trace_btn.click(
+        fn=update_trace_table,
+        inputs=[trace_state],
+        outputs=[trace_table],
+    )
+    download_trace_btn.click(
+        fn=download_trace_json,
+        inputs=[trace_state],
+        outputs=[trace_download],
+    )
+    demo.load(update_trace_table, inputs=[trace_state], outputs=[trace_table])
 
     gr.HTML("""
       <div id="credit-footer">
