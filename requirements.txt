@@ -13,3 +13,8 @@ requests>=2.31.0
 
 # Web UI (app.py) - for local demo and Hugging Face Spaces deployment
 gradio>=4.0.0
+
+# Agentic system additions
+chromadb>=0.5.0
+tenacity>=8.2.0
+pydantic>=2.0.0

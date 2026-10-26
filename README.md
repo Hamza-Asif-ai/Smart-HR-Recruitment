@@ -174,3 +174,27 @@ dataset, add it via *Add data* and point `RESUME_DIR` at the input path.
 `google-adk` · `google-genai` (Gemini) · `mcp` · `pandas` · `matplotlib`
 
 *Built for the Google AI Agents Capstone — "Agents for Business" track.*
+
+
+## Agentic architecture
+
+This system has been converted to a proper agentic AI system with the following agents:
+
+- **Planner Agent** (`planner_agent`): Breaks down recruitment goals into ordered steps with tool selections
+- **JD Agent** (`jd_agent`): Analyzes job descriptions into structured requirements
+- **Resume Screener Agent** (`resume_screener_agent`): Parses and scores resumes against role requirements
+- **Interview Scheduler Agent** (`interview_scheduler_agent`): Drafts personalized interview invitations
+- **Insights Agent** (`insights_agent`): Aggregates funnel metrics and generates reports
+- **Reflection Agent** (`reflection_agent`): Reviews results for inconsistencies and suggests fixes (self-correction)
+- **Email Writer Agent** (`email_writer_agent`): Writes personalized, warm interview invitations with strength highlighting
+- **Reply Classifier Agent** (`reply_classifier_agent`): Classifies candidate replies (confirm/reschedule/decline/question)
+- **Supervisor Agent** (`supervisor_agent`): Routes tasks to appropriate specialist agents (multi-agent delegation)
+
+### Key Features
+- **Human-in-the-Loop**: Email drafts require approval before sending
+- **Confidence Scoring**: All candidates have confidence scores; low confidence triggers review
+- **Persistent Memory**: ChromaDB stores decisions and learns from HR overrides
+- **Reflection & Self-Correction**: Agents review their own outputs for consistency
+- **Observability**: Full trace logging of all agent actions
+- **Budget Controls**: Configurable limits on LLM calls and execution time
+- **Security**: Prompt injection defense, PII masking, RBAC

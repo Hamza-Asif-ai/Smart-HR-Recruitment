@@ -272,3 +272,121 @@ __all__ = [
     "email_drafter_skill",
     "suggest_interview_slots",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# LLM EXTRACTION FUNCTIONS (with regex fallback)
+# --------------------------------------------------------------------------- #
+def llm_skill_extractor(resume_text: str, required_skills: List[str]) -> Dict[str, Any]:
+    """Extract skills using LLM with regex fallback.
+    
+    Args:
+        resume_text: Resume text
+        required_skills: List of required skills to look for
+        
+    Returns:
+        Dict with skill presence and confidence
+    """
+    result = {}
+    try:
+        from google import genai
+        from google.genai import types
+        import os
+        
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("No API key")
+        
+        client = genai.Client(api_key=api_key)
+        prompt = f"""Extract which of these required skills are present in the resume.
+Required skills: {required_skills}
+Resume: {resume_text[:3000]}
+
+Return JSON: {{"skills": {{"skill_name": true/false, ...}}, "confidence": 0.0-1.0}}"""
+        
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+        import json
+        data = json.loads(response.text)
+        return data
+    except Exception:
+        # Fallback to regex
+        for skill in required_skills:
+            result[skill] = skill.lower() in resume_text.lower()
+        return {"skills": result, "confidence": 0.5}
+
+
+def llm_experience_extractor(resume_text: str) -> Dict[str, Any]:
+    """Extract years of experience using LLM with regex fallback."""
+    try:
+        from google import genai
+        from google.genai import types
+        import os
+        
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("No API key")
+        
+        client = genai.Client(api_key=api_key)
+        prompt = f"""Extract total years of professional experience from this resume.
+Resume: {resume_text[:3000]}
+
+Return JSON: {{"years": float, "confidence": 0.0-1.0, "evidence": "brief explanation"}}"""
+        
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+        import json
+        return json.loads(response.text)
+    except Exception:
+        years = _estimate_years(resume_text)
+        return {"years": float(years), "confidence": 0.5, "evidence": "regex_estimate"}
+
+
+def llm_email_classifier(subject: str, body: str, has_attachment: bool = False) -> Dict[str, Any]:
+    """Classify email as application using LLM with regex fallback."""
+    try:
+        from google import genai
+        from google.genai import types
+        import os
+        
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("No API key")
+        
+        client = genai.Client(api_key=api_key)
+        prompt = f"""Classify this email as a job application.
+Subject: {subject}
+Body: {body[:2000]}
+Has attachment: {has_attachment}
+
+Return JSON: {{"is_application": bool, "is_relevant": bool, "role_mentioned": "string or empty", "confidence": 0.0-1.0}}"""
+        
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+        import json
+        return json.loads(response.text)
+    except Exception:
+        text = (subject + " " + body).lower()
+        is_app = any(k in text for k in ["resume", "cv", "application", "job", "position"])
+        return {"is_application": is_app, "is_relevant": is_app, "role_mentioned": "", "confidence": 0.4}
+
+
+__all__.extend(["llm_skill_extractor", "llm_experience_extractor", "llm_email_classifier"])

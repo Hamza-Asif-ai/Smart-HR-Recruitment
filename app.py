@@ -41,7 +41,129 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import gradio as gr
 
+# ADK imports for agentic system
+try:
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+    from src import agents as agents_mod
+    ADK_IMPORTS_AVAILABLE = True
+except Exception:
+    Runner = InMemorySessionService = types = None
+    agents_mod = None
+    ADK_IMPORTS_AVAILABLE = False
+
+# New modules
+from src import tracing
+from src import budget
+from src import memory
+from src import sanitize
+from src import orchestrator
+
 os.environ.setdefault("HR_DATA_ROOT", "./data")
+
+# Agentic system: module-level runner and session service
+_runner = None
+_session_service = None
+
+def _init_agent_runner():
+    """Initialize ADK runner and session service."""
+    global _runner, _session_service
+    if not ADK_IMPORTS_AVAILABLE:
+        return None, None
+    if _runner is None:
+        try:
+            _session_service = InMemorySessionService()
+            # Use supervisor agent as default
+            if agents_mod and hasattr(agents_mod, 'build_supervisor_agent'):
+                agent = agents_mod.build_supervisor_agent()
+            elif agents_mod and hasattr(agents_mod, 'build_recruitment_pipeline'):
+                agent = agents_mod.build_recruitment_pipeline()
+            else:
+                return None, None
+            _runner = Runner(
+                app_name="smart_hr_recruitment",
+                agent=agent,
+                session_service=_session_service,
+            )
+        except Exception as e:
+            print(f"Failed to init runner: {e}")
+            return None, None
+    return _runner, _session_service
+
+
+async def run_agent_async(goal: str, context: dict = None) -> dict:
+    """Run agent asynchronously with goal and collect results.
+    
+    Args:
+        goal: The goal/task for the agent
+        context: Additional context
+        
+    Returns:
+        Dict with final_text, tool_calls, reasoning_trace
+    """
+    runner, session_service = _init_agent_runner()
+    if runner is None or session_service is None:
+        raise RuntimeError("ADK runner not available")
+    
+    import uuid
+    from datetime import datetime
+    
+    user_id = context.get("user_id", "hr_user") if context else "hr_user"
+    session_id = context.get("session_id", str(uuid.uuid4())) if context else str(uuid.uuid4())
+    
+    start_time = datetime.now()
+    tracing.trace_recorder.record("system", "run_agent_async_start", input_summary=goal[:100])
+    
+    try:
+        # Create session
+        session = await session_service.create_session(
+            app_name="smart_hr_recruitment",
+            user_id=user_id,
+            session_id=session_id,
+        )
+        
+        # Prepare content
+        content = types.Content(
+            role="user",
+            parts=[types.Part(text=goal)]
+        )
+        
+        final_text = ""
+        tool_calls = []
+        reasoning_trace = []
+        
+        # Run agent
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=content,
+        ):
+            if hasattr(event, 'content') and event.content:
+                for part in event.content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        final_text += part.text + chr(10)
+                    if hasattr(part, 'function_call') and part.function_call:
+                        tool_calls.append({
+                            "name": part.function_call.name,
+                            "args": dict(part.function_call.args) if part.function_call.args else {}
+                        })
+            if hasattr(event, 'author'):
+                reasoning_trace.append({"author": event.author, "type": type(event).__name__})
+        
+        duration_ms = (datetime.now() - start_time).total_seconds() * 1000
+        tracing.trace_recorder.record("agent", "run_agent_async_complete", 
+                                       output_summary=final_text[:100], duration_ms=duration_ms)
+        budget.budget_tracker.increment_llm_calls()
+        
+        return {
+            "final_text": final_text.strip(),
+            "tool_calls": tool_calls,
+            "reasoning_trace": reasoning_trace,
+        }
+    except Exception as e:
+        tracing.trace_recorder.record("agent", "run_agent_async_error", output_summary=str(e)[:100])
+        raise
 
 # --------------------------------------------------------------------------- #
 # Theme & styling
@@ -691,6 +813,7 @@ _POSITION_STOPWORDS = {
 }
 
 
+# FALLBACK ONLY
 def _position_words(position):
     """'Senior Software Engineer' -> ['software', 'engineer'] — the words that actually
     identify the role, stripped of seniority/filler words that would over-restrict matching."""
@@ -708,6 +831,7 @@ _AMBIGUOUS_SKILLS = {"go", "r", "c"}
 _OFFICE_AMBIGUOUS = {"excel", "word", "access", "project", "teams", "outlook", "forms", "planner"}
 
 
+# FALLBACK ONLY
 def _skill_present(skill, text_norm):
     """True if `skill` appears in the (lower-cased, whitespace-normalised) resume text.
     Skills the project already knows (SKILL_VOCAB) also match their aliases
@@ -758,6 +882,7 @@ _RANGE = re.compile(
 _EXPLICIT_YEARS = re.compile(r"(\d{1,2}(?:\.\d)?)\s*\+?\s*(?:years?|yrs?)\b", re.I)
 
 
+# FALLBACK ONLY
 def _estimate_experience_years(text):
     """Total professional experience in years.
     Takes the larger of (a) an explicit claim such as '5 years of experience' and
@@ -985,6 +1110,45 @@ def _recommendation_for(match):
 
 
 def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text, min_years, limit=60):
+    """Scan Gmail inbox for applications, score candidates.
+    
+    Agentic version: uses ADK agents with fallback to deterministic pipeline.
+    """
+    import asyncio
+    from datetime import datetime
+    
+    # Initialize budget
+    try:
+        budget.budget_tracker.reset()
+    except Exception:
+        pass
+    
+    # Build goal for agent
+    goal = f"""Scan Gmail inbox for applications for {position}, classify each as application / spam / other-role, 
+    parse resumes, score against required skills {skills_text}, min {min_years} years, and return ranked list with confidence."""
+    
+    context = {
+        "position": position,
+        "skills_text": skills_text,
+        "nice_text": nice_text,
+        "min_years": min_years,
+    }
+    
+    agent_result = None
+    try:
+        if ADK_IMPORTS_AVAILABLE and os.environ.get("GEMINI_API_KEY"):
+            budget.budget_tracker.check_budget()
+            try:
+                agent_result = asyncio.run(run_agent_async(goal, context))
+                tracing.trace_recorder.record("analyze_inbox", "agent_call_success", 
+                                               output_summary=str(agent_result.get("final_text",""))[:100])
+            except Exception as ae:
+                tracing.trace_recorder.record("analyze_inbox", "agent_call_failed", output_summary=str(ae)[:100])
+                agent_result = None
+    except Exception as be:
+        tracing.trace_recorder.record("analyze_inbox", "budget_or_setup_failed", output_summary=str(be)[:100])
+        agent_result = None
+
     """
     Scans the given Gmail inbox for candidate application emails, reads each
     resume (PDF/TXT attachment text, else the email body) and scores it against
@@ -1159,6 +1323,11 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     else:                                   # very old Gradio: works for this session only
         saved_default_state = gr.State("")
     inbox_state = gr.State({"title": "", "candidates": []})
+    pending_drafts_state = gr.State([])
+    trace_state = gr.State([])
+    budget_config_state = gr.State({"max_llm_calls": 50, "max_seconds": 300})
+    overrides_state = gr.State([])
+
 
     gr.HTML("""
       <div id="header-wrap">

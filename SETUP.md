@@ -211,3 +211,12 @@ After a successful run, find the artifacts in **`data/output/`**:
 ---
 
 *Need the live LLM agents? See Section 6. Otherwise everything runs offline in deterministic mode.*
+
+
+## Environment Variables (Agentic Features)
+
+- `GEMINI_API_KEY` - Google Gemini API key for LLM agents (falls back to regex if not set)
+- `GOOGLE_API_KEY` - Alternative to GEMINI_API_KEY
+- `BROWSER_STATE_SECRET` - Secret for browser state (if needed)
+- `MAX_LLM_CALLS` - Maximum LLM calls per session (default: 50)
+- `MAX_SECONDS` - Maximum execution time in seconds (default: 300)

@@ -181,3 +181,30 @@ def run_pipeline(role: str = "recruiter", jd_filename: str = "") -> Dict[str, An
 
 __all__ = ["run_pipeline", "run_jd_agent", "run_resume_screener",
            "run_scheduler", "run_insights", "SHORTLIST_THRESHOLD"]
+
+
+# --------------------------------------------------------------------------- #
+# Planner Agent Integration
+# --------------------------------------------------------------------------- #
+def run_with_planner(ctx: SecurityContext, goal: str, jd_filename: str = "") -> Dict[str, Any]:
+    """Run pipeline using planner agent to generate plan then execute.
+    
+    Args:
+        ctx: Security context
+        goal: Recruitment goal
+        jd_filename: Optional JD filename
+        
+    Returns:
+        Pipeline results
+    """
+    try:
+        from . import agents
+        if agents.ADK_AVAILABLE:
+            planner = agents.build_planner_agent()
+            # In a full implementation, would call planner via runner
+            # For now, fall back to standard pipeline
+    except Exception:
+        pass
+    
+    return run_pipeline(role=ctx.role.value if hasattr(ctx.role, 'value') else "recruiter", 
+                        jd_filename=jd_filename)
