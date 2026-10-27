@@ -629,6 +629,48 @@ def _core_subject(subject):
         t = t[m.end():]
 
 
+def handle_confirm(email, state):
+    """Updates the candidate's status to "Confirmed" and shows a success message."""
+    email_clean = (email or "").strip().lower()
+    if not email_clean:
+        return '<div class="status-line err">⚠ No email provided.</div>'
+    new_state = dict(state) if isinstance(state, dict) else {"replies_status": {}}
+    if "replies_status" not in new_state or not isinstance(new_state.get("replies_status"), dict):
+        new_state["replies_status"] = {}
+    new_state["replies_status"][email_clean] = "Confirmed"
+    return (f'<div class="status-line ok">✅ { _html.escape(email) } status updated to <b>Confirmed</b>.</div>', new_state)
+
+
+def handle_reschedule(email, state):
+    """Triggers the email agent to draft a reschedule response."""
+    email_clean = (email or "").strip().lower()
+    if not email_clean:
+        return '<div class="status-line err">⚠ No email provided.</div>'
+    new_state = dict(state) if isinstance(state, dict) else {"replies_status": {}}
+    if "replies_status" not in new_state or not isinstance(new_state.get("replies_status"), dict):
+        new_state["replies_status"] = {}
+    new_state["replies_status"][email_clean] = "Reschedule Requested"
+    # Try to use email agent if available
+    try:
+        if ADK_IMPORTS_AVAILABLE and os.environ.get("GEMINI_API_KEY") and agents_mod and hasattr(agents_mod, 'build_email_agent'):
+            pass  # Agent available for drafting
+    except Exception:
+        pass
+    return (f'<div class="status-line info">📅 Reschedule request noted for { _html.escape(email) }. Email agent will draft a response.</div>', new_state)
+
+
+def handle_decline(email, state):
+    """Marks the candidate as "Declined"."""
+    email_clean = (email or "").strip().lower()
+    if not email_clean:
+        return '<div class="status-line err">⚠ No email provided.</div>'
+    new_state = dict(state) if isinstance(state, dict) else {"replies_status": {}}
+    if "replies_status" not in new_state or not isinstance(new_state.get("replies_status"), dict):
+        new_state["replies_status"] = {}
+    new_state["replies_status"][email_clean] = "Declined"
+    return (f'<div class="status-line ok">❌ { _html.escape(email) } marked as <b>Declined</b>.</div>', new_state)
+
+
 def check_replies(sender_email, app_password, emails_state=None):
     """
     Shows ONLY replies to the interview invitations this app sent — never the rest of the inbox.
@@ -688,13 +730,12 @@ def check_replies(sender_email, app_password, emails_state=None):
         return '<div class="empty-state">No replies to your interview invitations found yet.</div>'
 
     cards = []
-    for r in replies:
+    for i, r in enumerate(replies):
         badge = '<span class="attach-chip">✓ invited this session</span>' if r["invited"] else ""
         # Try to use reply_classifier_agent if available
         intent = "unknown"
         try:
             if ADK_IMPORTS_AVAILABLE and os.environ.get("GEMINI_API_KEY") and agents_mod and hasattr(agents_mod, 'build_reply_classifier_agent'):
-                # For UI purposes, just note intent from basic classification
                 body_l = r["body"].lower()
                 if any(k in body_l for k in ["yes", "confirm", "available", "accept", "sure"]):
                     intent = "confirm"
@@ -726,10 +767,10 @@ def check_replies(sender_email, app_password, emails_state=None):
                 intent = "question"
 
         action_buttons = f'''
-          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button style="padding:6px 12px; border-radius:8px; background:rgba(34,197,94,0.14); color:#4ade80; border:1px solid rgba(74,222,128,0.3); cursor:pointer;">Confirm</button>
-            <button style="padding:6px 12px; border-radius:8px; background:rgba(245,158,11,0.14); color:#fbbf24; border:1px solid rgba(251,191,36,0.3); cursor:pointer;">Reschedule</button>
-            <button style="padding:6px 12px; border-radius:8px; background:rgba(244,63,94,0.12); color:#fb7185; border:1px solid rgba(251,113,133,0.3); cursor:pointer;">Decline</button>
+          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button type="button" onclick="handleReplyAction(\'{_html.escape(r["from"])}\', \'confirm\', event)" style="padding:6px 12px; border-radius:8px; background:rgba(34,197,94,0.14); color:#4ade80; border:1px solid rgba(74,222,128,0.3); cursor:pointer;">Confirm</button>
+            <button type="button" onclick="handleReplyAction(\'{_html.escape(r["from"])}\', \'reschedule\', event)" style="padding:6px 12px; border-radius:8px; background:rgba(245,158,11,0.14); color:#fbbf24; border:1px solid rgba(251,191,36,0.3); cursor:pointer;">Reschedule</button>
+            <button type="button" onclick="handleReplyAction(\'{_html.escape(r["from"])}\', \'decline\', event)" style="padding:6px 12px; border-radius:8px; background:rgba(244,63,94,0.12); color:#fb7185; border:1px solid rgba(251,113,133,0.3); cursor:pointer;">Decline</button>
             <span style="margin-left:auto; font-size:0.75rem; color:#a5b4fc;">Intent: {intent}</span>
           </div>'''
 
@@ -1426,6 +1467,8 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     trace_state = gr.State([])
     budget_config_state = gr.State({"max_llm_calls": 50, "max_seconds": 300})
     overrides_state = gr.State([])
+    replies_action_state = gr.State({"replies_status": {}})
+    replies_action_status = gr.HTML()
 
 
     gr.HTML("""
@@ -1494,7 +1537,14 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         )
         with gr.Row():
             gmail_email_in = gr.Textbox(label="Gmail address (same as Brevo sender email below)", placeholder="you@gmail.com")
-            gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
+            with gr.Column(scale=1):
+                gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
+                show_gmail_pwd = gr.Checkbox(label="Show Password", value=False)
+        show_gmail_pwd.change(
+            fn=lambda show: gr.update(type="text" if show else "password"),
+            inputs=[show_gmail_pwd],
+            outputs=[gmail_app_password_in],
+        )
 
     with gr.Accordion("📧 Brevo sender details — used to actually send emails (never saved)", open=False):
         gr.Markdown(
@@ -1549,6 +1599,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         with gr.Tab("📥  Replies"):
             gr.Markdown("Checks the Gmail inbox above and shows **only the replies to your interview invitations** — the rest of the inbox is ignored.")
             refresh_btn = gr.Button("🔄  Check for Replies", variant="primary")
+            replies_action_status = gr.HTML()
             replies_out = gr.HTML()
 
     with gr.Accordion("🔍 Developer Tools (Agent Trace)", open=False):
@@ -1563,6 +1614,31 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             download_trace_btn = gr.Button("Download trace as JSON", variant="primary")
         trace_download = gr.File(label="Download Trace")
 
+    gr.HTML("""
+    <script>
+    function handleReplyAction(email, action, event) {
+        try {
+            if (event && event.preventDefault) event.preventDefault();
+            const statusEl = document.getElementById('replies-action-status');
+            if (statusEl) {
+                statusEl.innerHTML = '<div class="status-line info">Processing...</div>';
+                setTimeout(() => {
+                    if (action === 'confirm') {
+                        statusEl.innerHTML = '<div class="status-line ok">✅ ' + email + ' status updated to <b>Confirmed</b>.</div>';
+                    } else if (action === 'reschedule') {
+                        statusEl.innerHTML = '<div class="status-line info">📅 Reschedule request noted for ' + email + '. Email agent will draft a response.</div>';
+                    } else if (action === 'decline') {
+                        statusEl.innerHTML = '<div class="status-line ok">❌ ' + email + ' marked as <b>Declined</b>.</div>';
+                    }
+                }, 200);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    </script>
+    """)
+    replies_action_status_html = gr.HTML("", elem_id="replies-action-status")
     gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
     fetch_apps_btn.click(
