@@ -21,7 +21,7 @@ deterministic orchestrator in ``orchestrator.py`` runs the same skills directly.
 from __future__ import annotations
 
 # Default Gemini model used by every agent. Flash is fast + cheap for Kaggle.
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-flash-latest"
 
 try:
     from google.adk.agents import LlmAgent, SequentialAgent

@@ -305,7 +305,7 @@ Resume: {resume_text[:3000]}
 Return JSON: {{"skills": {{"skill_name": true/false, ...}}, "confidence": 0.0-1.0}}"""
         
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-flash-latest",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -336,11 +336,11 @@ def llm_experience_extractor(resume_text: str) -> Dict[str, Any]:
         client = genai.Client(api_key=api_key)
         prompt = f"""Extract total years of professional experience from this resume.
 Resume: {resume_text[:3000]}
-
+ 
 Return JSON: {{"years": float, "confidence": 0.0-1.0, "evidence": "brief explanation"}}"""
         
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-flash-latest",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -370,11 +370,11 @@ def llm_email_classifier(subject: str, body: str, has_attachment: bool = False) 
 Subject: {subject}
 Body: {body[:2000]}
 Has attachment: {has_attachment}
-
+ 
 Return JSON: {{"is_application": bool, "is_relevant": bool, "role_mentioned": "string or empty", "confidence": 0.0-1.0}}"""
         
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-flash-latest",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
