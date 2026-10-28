@@ -68,16 +68,19 @@ def mask_pii(text: str, mask_names: bool = False) -> str:
     return masked
 
 
-def safe_preview(text: str, limit: int = 60) -> str:
+def safe_preview(text: str, limit: int = 60, mask_names: bool = False) -> str:
     """Mask PII *before* truncating, so a cut-off email/phone cannot leak.
 
     Truncating first (``mask_pii(text[:limit])``) can leave a partial address
     such as ``nadia.petrova@exampl`` in a log line, because the regex no longer
     sees a complete email. This helper always masks the whole string first.
+
+    Set ``mask_names=True`` for resume previews, where the first non-empty line
+    is normally the candidate's name.
     """
     if not text:
         return ""
-    return mask_pii(str(text))[:limit]
+    return mask_pii(str(text), mask_names=mask_names)[:limit]
 
 
 def mask_pii_in_obj(obj: Any) -> Any:

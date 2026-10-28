@@ -21,17 +21,20 @@ _INJECTION_PATTERNS = [
 ]
 
 
-def sanitize_untrusted_text(text: str) -> str:
+def sanitize_untrusted_text(text: str, wrap: bool = True) -> str:
     """Wrap untrusted content in tags and strip common injection markers.
     
     Args:
         text: Untrusted text (resume/email content)
+        wrap: Wrap the result in ``<untrusted_data>`` tags. Set False when the
+            text will be parsed structurally (for example by the deterministic
+            resume parser), because the wrapper would become the first line.
         
     Returns:
-        Sanitized text wrapped in <untrusted_data> tags
+        Sanitized text, wrapped in <untrusted_data> tags by default.
     """
     if not text:
-        return "<untrusted_data></untrusted_data>"
+        return "<untrusted_data></untrusted_data>" if wrap else ""
     
     # Cap length
     capped = text[:8000]
@@ -41,6 +44,8 @@ def sanitize_untrusted_text(text: str) -> str:
     for pattern in _INJECTION_PATTERNS:
         sanitized = re.sub(pattern, "[REDACTED]", sanitized, flags=re.IGNORECASE)
     
+    if not wrap:
+        return sanitized
     return f"<untrusted_data>\n{sanitized}\n</untrusted_data>"
 
 

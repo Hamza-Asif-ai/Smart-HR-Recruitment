@@ -82,6 +82,46 @@ def _estimate_years(text: str) -> int:
     return 0
 
 
+_SECTION_ALIASES = {
+    "summary": {"summary", "profile", "objective", "about", "professional summary"},
+    "skills": {
+        "skills", "keywords", "core competencies", "technical skills",
+        "technologies", "tech stack", "competencies",
+    },
+    "experience": {
+        "experience", "work experience", "professional experience",
+        "employment", "work history", "employment history",
+    },
+    "education": {"education", "academic background", "academics"},
+}
+_SECTION_LOOKUP = {
+    alias: canonical
+    for canonical, aliases in _SECTION_ALIASES.items()
+    for alias in aliases
+}
+
+
+def _section_heading(line: str) -> str:
+    """Return the canonical section name if ``line`` is a heading, else ''."""
+    cleaned = re.sub(r"[^a-z ]", "", line.lower()).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return _SECTION_LOOKUP.get(cleaned, "")
+
+
+def _split_sections(text: str) -> Dict[str, str]:
+    """Split a resume into summary/skills/experience/education blocks."""
+    blocks: Dict[str, List[str]] = {}
+    current = "header"
+    for line in text.splitlines():
+        heading = _section_heading(line)
+        if heading:
+            current = heading
+            blocks.setdefault(current, [])
+            continue
+        blocks.setdefault(current, []).append(line)
+    return {name: "\n".join(lines).strip() for name, lines in blocks.items()}
+
+
 # --------------------------------------------------------------------------- #
 # SKILL 1: resume_parser_skill
 # --------------------------------------------------------------------------- #
@@ -97,11 +137,17 @@ def resume_parser_skill(resume_text: str, source_id: str = "") -> Dict[str, Any]
     """
     lines = [ln.strip() for ln in resume_text.splitlines() if ln.strip()]
     name = lines[0].title() if lines else "Unknown Candidate"
+    parse_status = "ok" if len(resume_text.strip()) >= 20 else "unreadable"
 
     email_m = _EMAIL_RE.search(resume_text)
     phone_m = _PHONE_RE.search(resume_text.replace(email_m.group() if email_m else "", ""))
 
     degrees = sorted({d.upper().replace(".", "") for d in _DEGREE_RE.findall(resume_text)})
+    sections = _split_sections(resume_text)
+    # Evidence is strongest in the experience block. If the resume has no
+    # experience heading, fall back to the whole document rather than treating
+    # an unheaded resume as having zero evidence.
+    experience_text = sections.get("experience") or resume_text
 
     return {
         "source_id": source_id,
@@ -109,8 +155,13 @@ def resume_parser_skill(resume_text: str, source_id: str = "") -> Dict[str, Any]
         "email": email_m.group() if email_m else "",
         "phone": phone_m.group().strip() if phone_m else "",
         "skills": _detect_skills(resume_text),
+        "experienced_skills": _detect_skills(experience_text),
         "experience_years": _estimate_years(resume_text),
         "education": degrees,
+        "parse_status": parse_status,
+        "parse_warnings": [] if parse_status == "ok" else [
+            "No extractable text (image-only or empty PDF)"
+        ],
     }
 
 
@@ -162,21 +213,29 @@ def candidate_scorer_skill(
     """Score a parsed candidate against parsed JD requirements.
 
     Weighted model:
-        * 60% required-skill coverage
-        * 15% nice-to-have coverage
-        * 20% experience match
+        * 50% required-skill coverage (half listed, half demonstrated in experience)
+        * 10% nice-to-have coverage
+        * 25% experience match
         *  5% education match
+        * 10% evidence coverage (required skills found in the experience block)
+
+    The evidence split is what stops a resume that merely lists every keyword
+    from outranking a candidate who can show the same skills in real roles.
     Returns a dict with match_percent (0-100) and an explainable breakdown.
     """
     req_skills = set(requirements.get("required_skills", []))
     nice_skills = set(requirements.get("nice_to_have", []))
     cand_skills = set(candidate.get("skills", []))
+    experienced_skills = set(candidate.get("experienced_skills", []))
 
     matched_req = sorted(req_skills & cand_skills)
+    matched_req_experience = sorted(req_skills & experienced_skills)
     missing_req = sorted(req_skills - cand_skills)
     matched_nice = sorted(nice_skills & cand_skills)
 
-    req_cov = len(matched_req) / len(req_skills) if req_skills else 1.0
+    listed_cov = len(matched_req) / len(req_skills) if req_skills else 1.0
+    evidence_cov = len(matched_req_experience) / len(req_skills) if req_skills else 1.0
+    skill_score = 0.5 * listed_cov + 0.5 * evidence_cov
     nice_cov = len(matched_nice) / len(nice_skills) if nice_skills else 0.0
 
     min_years = requirements.get("min_years", 0) or 0
@@ -185,11 +244,38 @@ def candidate_scorer_skill(
 
     edu_score = 1.0 if candidate.get("education") else 0.0
 
-    match = 100.0 * (0.60 * req_cov + 0.15 * nice_cov + 0.20 * exp_score + 0.05 * edu_score)
+    match = 100.0 * (
+        0.50 * skill_score
+        + 0.10 * nice_cov
+        + 0.25 * exp_score
+        + 0.05 * edu_score
+        + 0.10 * evidence_cov
+    )
     match = round(match, 1)
 
-    if match >= 75:
+    parse_status = candidate.get("parse_status", "ok")
+    shortlistable = parse_status != "unreadable"
+    evidence_ratio = (
+        len(matched_req_experience) / len(matched_req) if matched_req else 0.0
+    )
+    keyword_stuffing_suspected = (
+        len(cand_skills) >= 12
+        and listed_cov >= 0.8
+        and evidence_cov < 0.35
+    )
+
+    if not shortlistable:
+        recommendation = "Unreadable resume - manual review"
+    elif keyword_stuffing_suspected:
+        recommendation = (
+            "Possible match - review (keyword stuffing suspected)"
+            if match >= 55
+            else "Weak match - likely reject (keyword stuffing suspected)"
+        )
+    elif match >= 75:
         recommendation = "Strong match - shortlist"
+    elif match >= 70:
+        recommendation = "Possible match - shortlist"
     elif match >= 55:
         recommendation = "Possible match - review"
     else:
@@ -200,9 +286,17 @@ def candidate_scorer_skill(
         "source_id": candidate.get("source_id"),
         "match_percent": match,
         "matched_required": matched_req,
+        "matched_required_in_experience": matched_req_experience,
         "missing_required": missing_req,
         "matched_nice_to_have": matched_nice,
         "experience_years": cand_years,
+        "listed_skill_coverage_percent": round(100 * listed_cov, 1),
+        "evidence_coverage_percent": round(100 * evidence_cov, 1),
+        "evidence_ratio_percent": round(100 * evidence_ratio, 1),
+        "keyword_stuffing_suspected": keyword_stuffing_suspected,
+        "parse_status": parse_status,
+        "parse_warnings": candidate.get("parse_warnings", []),
+        "shortlistable": shortlistable,
         "recommendation": recommendation,
     }
 

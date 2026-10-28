@@ -25,7 +25,8 @@ from typing import Any, Dict, List
 
 from . import mcp_filesystem_server as fs
 from . import skills
-from .security import SecurityContext, Role, get_secure_logger, mask_pii, safe_preview
+from .sanitize import sanitize_untrusted_text
+from .security import SecurityContext, Role, get_secure_logger, safe_preview
 
 log = get_secure_logger("smart_hr.orchestrator")
 
@@ -55,12 +56,16 @@ def run_resume_screener(ctx: SecurityContext, requirements: Dict[str, Any]) -> L
     log.info("Resume Screener: found %d resumes to screen", len(resume_files))
 
     scored: List[Dict[str, Any]] = []
-    for fname in resume_files:
+    for index, fname in enumerate(resume_files, start=1):
         raw = fs.read_resume(fname)
-        # Logs are automatically PII-masked, but we also mask explicitly here
-        # to demonstrate the security requirement at the data layer.
-        log.info("Screening resume %s | preview: %s", fname, safe_preview(raw))
-        profile = skills.resume_parser_skill(raw, source_id=fname)
+        # Treat resume text as untrusted data before parsing/scoring. ``wrap=False``
+        # keeps the first line usable as the candidate name.
+        clean = sanitize_untrusted_text(raw, wrap=False)
+        # Logs are automatically PII-masked, but we also mask the candidate name
+        # and never log the filename (which may itself contain a real name).
+        log.info("Screening resume %d/%d | preview: %s", index, len(resume_files),
+                 safe_preview(clean, mask_names=True))
+        profile = skills.resume_parser_skill(clean, source_id=fname)
         result = skills.candidate_scorer_skill(profile, requirements)
         # Carry contact info forward (only an authorized role can later unmask).
         result["email"] = profile["email"]
@@ -82,7 +87,10 @@ def run_scheduler(ctx: SecurityContext, ranked: List[Dict[str, Any]],
                   role_title: str) -> List[Dict[str, Any]]:
     ctx.authorize("send_invitations")
 
-    shortlist = [c for c in ranked if c["match_percent"] >= SHORTLIST_THRESHOLD]
+    shortlist = [
+        c for c in ranked
+        if c.get("shortlistable", True) and c["match_percent"] >= SHORTLIST_THRESHOLD
+    ]
     slots = skills.suggest_interview_slots(len(shortlist))
     log.info("Scheduler: %d candidates shortlisted (threshold %.0f%%)",
              len(shortlist), SHORTLIST_THRESHOLD)
@@ -91,8 +99,8 @@ def run_scheduler(ctx: SecurityContext, ranked: List[Dict[str, Any]],
     for cand, slot in zip(shortlist, slots):
         draft = skills.email_drafter_skill(cand, role_title=role_title, slot=slot)
         emails.append(draft)
-        log.info("Scheduler: drafted invitation for %s at %s",
-                 mask_pii(cand["name"]), slot)
+        log.info("Scheduler: drafted invitation for candidate #%s at %s",
+                 cand.get("rank", "?"), slot)
     return emails
 
 
@@ -105,6 +113,8 @@ def run_insights(ctx: SecurityContext, requirements: Dict[str, Any],
 
     total = len(ranked)
     shortlisted = len(emails)
+    unreadable = sum(1 for c in ranked if c.get("parse_status") == "unreadable")
+    keyword_stuffing = sum(1 for c in ranked if c.get("keyword_stuffing_suspected"))
     avg_score = round(sum(c["match_percent"] for c in ranked) / total, 1) if total else 0.0
 
     skill_counter: Counter = Counter()
@@ -118,6 +128,8 @@ def run_insights(ctx: SecurityContext, requirements: Dict[str, Any],
         "shortlisted": shortlisted,
         "shortlist_rate_percent": round(100 * shortlisted / total, 1) if total else 0.0,
         "average_match_percent": avg_score,
+        "unreadable_resumes": unreadable,
+        "keyword_stuffing_suspected": keyword_stuffing,
         "top_skills_found": top_skills,
         "score_distribution": [c["match_percent"] for c in ranked],
         "candidate_labels": [c["name"].split()[0] for c in ranked],
@@ -139,6 +151,8 @@ def _render_report(metrics: Dict[str, Any], ranked: List[Dict[str, Any]]) -> str
         f"- **Shortlisted:** {metrics['shortlisted']}",
         f"- **Shortlist rate:** {metrics['shortlist_rate_percent']}%",
         f"- **Average match score:** {metrics['average_match_percent']}%",
+        f"- **Unreadable resumes (manual review):** {metrics.get('unreadable_resumes', 0)}",
+        f"- **Keyword-stuffing suspects:** {metrics.get('keyword_stuffing_suspected', 0)}",
         "",
         "## Top Skills Found in Applicant Pool",
     ]

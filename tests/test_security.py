@@ -33,6 +33,12 @@ def test_safe_preview_masks_before_truncating():
     assert "555" not in preview
 
 
+def test_safe_preview_can_mask_candidate_name():
+    preview = safe_preview("Nadia Petrova\nSite Reliability Engineer", mask_names=True)
+    assert "Nadia" not in preview
+    assert preview.startswith("[NAME]")
+
+
 def test_logging_filter_masks_records():
     record = logging.LogRecord(
         name="test",
