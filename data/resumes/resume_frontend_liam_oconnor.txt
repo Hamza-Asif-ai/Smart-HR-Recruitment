@@ -1,0 +1,25 @@
+Liam O'Connor
+Frontend Engineer
+liam.oconnor@example.com | +353 1 555 0111 | Dublin, Ireland
+
+SUMMARY
+Frontend engineer with 5 years of experience building React and TypeScript
+applications. Some Node.js API work; interested in full-stack roles.
+
+SKILLS
+- Languages: JavaScript, TypeScript, HTML, CSS
+- Frameworks: React, Next.js, Redux
+- Backend: Node.js, Express, REST APIs
+- Testing: Jest, Playwright
+- Tools: Git, GitHub Actions, Docker (basic)
+
+EXPERIENCE
+Frontend Engineer, ShopLane (2020 - Present)
+- Built accessible React dashboards used by 20k merchants.
+- Added Playwright end-to-end tests and GitHub Actions checks.
+
+Web Developer, Craft Digital (2018 - 2020)
+- Built marketing sites and small Express APIs.
+
+EDUCATION
+B.Sc., Computer Science - University College Dublin (2018)

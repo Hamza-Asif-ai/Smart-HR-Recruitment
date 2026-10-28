@@ -25,7 +25,7 @@ from typing import Any, Dict, List
 
 from . import mcp_filesystem_server as fs
 from . import skills
-from .security import SecurityContext, Role, get_secure_logger, mask_pii
+from .security import SecurityContext, Role, get_secure_logger, mask_pii, safe_preview
 
 log = get_secure_logger("smart_hr.orchestrator")
 
@@ -59,7 +59,7 @@ def run_resume_screener(ctx: SecurityContext, requirements: Dict[str, Any]) -> L
         raw = fs.read_resume(fname)
         # Logs are automatically PII-masked, but we also mask explicitly here
         # to demonstrate the security requirement at the data layer.
-        log.info("Screening resume %s | preview: %s", fname, mask_pii(raw[:60]))
+        log.info("Screening resume %s | preview: %s", fname, safe_preview(raw))
         profile = skills.resume_parser_skill(raw, source_id=fname)
         result = skills.candidate_scorer_skill(profile, requirements)
         # Carry contact info forward (only an authorized role can later unmask).

@@ -1,0 +1,28 @@
+Hannah Lee
+Backend Engineer
+hannah.lee@example.com | hannah.lee+alt@example.com | +1 (415) 555-0115 | San Francisco, USA
+
+SUMMARY
+Backend engineer with 5 years of experience building Python services and
+REST APIs on AWS. Comfortable with containers and relational databases.
+
+SKILLS
+- Languages: Python, SQL
+- Frameworks: FastAPI, Django
+- Cloud: AWS (ECS, Lambda, RDS, S3)
+- Infrastructure: Docker, Kubernetes, GitHub Actions CI/CD
+- Data: PostgreSQL, Redis
+- Messaging: SQS
+- Architecture: Microservices, REST
+
+EXPERIENCE
+Backend Engineer, FleetMetric (2020 - Present)
+- Built Python REST APIs for fleet analytics.
+- Modeled PostgreSQL schemas and optimized slow queries.
+- Deployed Docker services to ECS and added CI/CD.
+
+Software Engineer, Bluebird Apps (2019 - 2020)
+- Built Django admin tools and internal REST endpoints.
+
+EDUCATION
+B.Sc., Computer Science - Example State University (2019)

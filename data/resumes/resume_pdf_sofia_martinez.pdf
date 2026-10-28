@@ -1,0 +1,68 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Length 1431 >>
+stream
+BT
+/F1 10 Tf
+50 780 Td
+13 TL
+(SOFIA MARTINEZ) Tj T*
+(Senior Backend Engineer) Tj T*
+(sofia.martinez@example.com | +34 91 555 0116 | Madrid, Spain) Tj T*
+(linkedin.com/in/sofiamartinez-dev) Tj T*
+() Tj T*
+(PROFESSIONAL SUMMARY) Tj T*
+(Backend engineer with 6 years of experience building cloud-native payment and) Tj T*
+(data platforms. Strong in Python microservices on GCP with a focus on) Tj T*
+(reliability, APIs, and observability.) Tj T*
+() Tj T*
+(SKILLS) Tj T*
+(Languages: Python, Go, SQL) Tj T*
+(Cloud: GCP \(Cloud Run, Pub/Sub, BigQuery\), AWS) Tj T*
+(Infrastructure: Docker, Kubernetes, Terraform, CI/CD \(GitHub Actions\)) Tj T*
+(Data: PostgreSQL, Redis) Tj T*
+(APIs: REST, gRPC, Protocol Buffers) Tj T*
+(Other: Microservices, distributed systems, Kafka, observability) Tj T*
+() Tj T*
+(EXPERIENCE) Tj T*
+(Senior Backend Engineer, PagoLuz \(2020 - Present\)) Tj T*
+(- Led a Python payments service handling 4M transactions/day on GCP.) Tj T*
+(- Migrated a monolith to Cloud Run microservices, cutting latency by 40%.) Tj T*
+(- Built gRPC APIs and mentored four engineers.) Tj T*
+() Tj T*
+(Backend Engineer, ShopGrid \(2018 - 2020\)) Tj T*
+(- Built REST APIs in Python and PostgreSQL data models.) Tj T*
+(- Implemented Kafka event pipelines.) Tj T*
+() Tj T*
+(EDUCATION) Tj T*
+(M.Sc., Computer Science - Example University of Madrid \(2018\)) Tj T*
+(B.Sc., Computer Science - Example University of Seville \(2016\)) Tj T*
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000344 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1827
+%%EOF

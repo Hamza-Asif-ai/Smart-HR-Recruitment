@@ -1,0 +1,26 @@
+Samuel Adeyemi
+Data Engineer
+samuel.adeyemi@example.com | +234 1 555 0110 | Lagos, Nigeria
+
+SUMMARY
+Data engineer with 5 years of experience building batch and streaming
+pipelines in Python and SQL, with cloud data warehouses.
+
+SKILLS
+- Languages: Python, SQL, Scala
+- Data: PostgreSQL, BigQuery, Redis, Kafka
+- Cloud: GCP (BigQuery, Pub/Sub, Cloud Run), AWS (S3, RDS)
+- Tools: Docker, Kubernetes, Airflow, dbt, Terraform
+- Practices: CI/CD, microservices, observability
+
+EXPERIENCE
+Data Engineer, LedgerWorks (2020 - Present)
+- Built Kafka and Pub/Sub pipelines processing 50M events/day.
+- Modeled BigQuery and PostgreSQL datasets for analytics.
+- Containerized Airflow jobs on Kubernetes and added monitoring.
+
+Analytics Engineer, MarketPulse (2018 - 2020)
+- Wrote SQL transforms and Python ingestion jobs.
+
+EDUCATION
+B.Sc., Statistics - University of Lagos (2018)

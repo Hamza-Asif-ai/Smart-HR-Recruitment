@@ -1,0 +1,26 @@
+Kwame Mensah
+Junior Python Developer
+kwame.mensah@example.com | +233 30 555 0112 | Accra, Ghana
+
+SUMMARY
+Python developer with 2 years of experience in Django and REST APIs. Looking
+to grow into cloud-native backend engineering.
+
+SKILLS
+- Languages: Python, SQL
+- Frameworks: Django, Flask
+- Databases: PostgreSQL, SQLite
+- Tools: Git, Docker, GitHub Actions
+- Cloud: basic AWS (EC2, S3)
+
+EXPERIENCE
+Junior Python Developer, Nkwa Systems (2023 - Present)
+- Built Django REST endpoints for a payroll product.
+- Wrote PostgreSQL queries and unit tests.
+- Packaged services with Docker for staging deployments.
+
+IT Support Assistant, Accra Digital Hub (2022 - 2023)
+- Supported internal applications and SQL reports.
+
+EDUCATION
+B.Sc., Computer Science - University of Ghana (2022)

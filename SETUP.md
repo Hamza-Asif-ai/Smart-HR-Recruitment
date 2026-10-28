@@ -82,12 +82,17 @@ This installs everything the project needs:
 
 | Library | Purpose | Required? |
 |---------|---------|-----------|
-| `google-adk` | Google Agent Development Kit — base for the 4 agents | ✅ Core |
-| `google-genai` | Gemini API client (for live LLM agents) | ✅ Core |
-| `mcp` | MCP filesystem server (sandboxed file tools) | ✅ Core |
-| `pandas` | Data handling (notebook) | ✅ |
-| `matplotlib` | Builds the dashboard image | ✅ |
-| `pypdf` | Parses the PDF resume (Sofia Martinez) | ⚠️ Needed for the PDF resume |
+| `google-adk` | Google Agent Development Kit — base for the 4 agents | Core |
+| `google-genai` | Gemini API client (for live LLM agents) | Core |
+| `mcp` | MCP filesystem server (sandboxed file tools) | Core |
+| `pandas` | Data handling (notebook) | Core |
+| `matplotlib` | Builds the dashboard image | Core |
+| `pypdf` | Parses PDF resumes (normal, scanned, hidden-text) | Core |
+| `gradio` | Local demo UI (`app.py`) | Core |
+| `pillow` | Generates the synthetic PDF fixtures | Core |
+| `chromadb` | Optional vector memory; JSON fallback if absent | Optional |
+
+Versions are pinned in `requirements.txt`. `requirements-dev.txt` adds `pytest`.
 
 ---
 
@@ -155,8 +160,14 @@ full pipeline still runs and produces real output. To run the live Gemini `LlmAg
 pip install jupyter
 jupyter notebook
 ```
-Open `notebook/smart_hr_recruitment.ipynb` in the browser and choose **Run All**.
-On Kaggle it's self-contained — just upload and *Run All*.
+
+Open `notebook/smart_hr_recruitment.ipynb` from the **repository root** and
+choose **Run All**. The notebook imports the real modules from `src/` and uses
+`data/resumes/`; it does not write duplicate copies.
+
+For Kaggle, upload the **whole repository** as a dataset (or clone it in the
+session) and run the notebook from that directory. Uploading only the `.ipynb`
+will fail because `src/` is required.
 
 ---
 
@@ -168,9 +179,11 @@ cd "C:\Users\<YourName>\smart-hr-recruitment"
 python -m venv venv
 venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 $env:HR_DATA_ROOT="./data"
 python -m src.orchestrator
+python tools/check_no_pii.py --all
+pytest -q
 ```
 
 **Linux / Mac**
@@ -179,22 +192,26 @@ cd smart-hr-recruitment
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 HR_DATA_ROOT=./data python3 -m src.orchestrator
+python tools/check_no_pii.py --all
+pytest -q
 ```
 
 ---
 
 ## 9. Output
 
-After a successful run, find the artifacts in **`data/output/`**:
+`data/output/` is created at runtime and is gitignored.
+
+The deterministic pipeline writes:
 
 | File | What it is |
 |------|-----------|
-| `ranked_candidates.json` | All candidates scored & ranked against the JD |
-| `interview_emails.json` | Personalized interview invitations for the shortlist |
 | `recruitment_insights.md` | Funnel metrics + ranked candidates table |
-| `dashboard.png` | Visual dashboard (match scores · funnel · top skills) |
+
+The notebook and Gradio UI additionally produce `ranked_candidates.json`,
+`interview_emails.json`, and `dashboard.png` when those flows are used.
 
 ---
 
@@ -215,8 +232,9 @@ After a successful run, find the artifacts in **`data/output/`**:
 
 ## Environment Variables (Agentic Features)
 
-- `GEMINI_API_KEY` - Google Gemini API key for LLM agents (falls back to regex if not set)
-- `GOOGLE_API_KEY` - Alternative to GEMINI_API_KEY
-- `BROWSER_STATE_SECRET` - Secret for browser state (if needed)
-- `MAX_LLM_CALLS` - Maximum LLM calls per session (default: 50)
-- `MAX_SECONDS` - Maximum execution time in seconds (default: 300)
+- `GOOGLE_API_KEY` - Google Gemini API key for live LLM agents. Without it, the
+  deterministic offline pipeline is used.
+- `GEMINI_API_KEY` - Legacy alias accepted by the UI and skills layer.
+- `BROWSER_STATE_SECRET` - Enables Gradio `BrowserState`; without it the UI uses
+  session-only `gr.State`.
+- `HR_DATA_ROOT` - Data directory (default: `./data`).

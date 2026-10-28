@@ -1,8 +1,27 @@
+# Virtual environments
 venv/
+.venv/
+
+# Python caches / build artifacts
 __pycache__/
-*.pyc
-scratchpad/.env
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets — never commit
 .env
-data/output/*.json
-data/output/*.png
-data/output/*.md
+scratchpad/.env
+
+# Runtime data / generated artifacts
+logs/
+data/memory/
+data/output/
+*.sqlite
+*.sqlite3
+*.jsonl
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

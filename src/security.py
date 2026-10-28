@@ -68,6 +68,18 @@ def mask_pii(text: str, mask_names: bool = False) -> str:
     return masked
 
 
+def safe_preview(text: str, limit: int = 60) -> str:
+    """Mask PII *before* truncating, so a cut-off email/phone cannot leak.
+
+    Truncating first (``mask_pii(text[:limit])``) can leave a partial address
+    such as ``nadia.petrova@exampl`` in a log line, because the regex no longer
+    sees a complete email. This helper always masks the whole string first.
+    """
+    if not text:
+        return ""
+    return mask_pii(str(text))[:limit]
+
+
 def mask_pii_in_obj(obj: Any) -> Any:
     """Recursively mask PII in strings inside dicts/lists (for safe logging)."""
     if isinstance(obj, str):
@@ -190,6 +202,7 @@ def require(capability: str):
 
 __all__ = [
     "mask_pii",
+    "safe_preview",
     "mask_pii_in_obj",
     "PiiMaskingFilter",
     "get_secure_logger",

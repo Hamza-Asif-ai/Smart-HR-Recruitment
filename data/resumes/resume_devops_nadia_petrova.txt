@@ -1,0 +1,28 @@
+Nadia Petrova
+Site Reliability Engineer
+nadia.petrova@example.com | +49 30 5550 0109 | Berlin, Germany
+
+SUMMARY
+SRE with 7 years of experience running Kubernetes platforms, CI/CD, and
+observability for SaaS products. Python and Go automation.
+
+SKILLS
+- Languages: Python, Go, Bash
+- Cloud: AWS (EKS, ECS, S3), GCP (GKE, Cloud Run)
+- Infrastructure: Docker, Kubernetes, Terraform, Ansible
+- CI/CD: GitHub Actions, GitLab CI, Jenkins
+- Observability: Prometheus, Grafana, OpenTelemetry
+- Data: PostgreSQL, Redis
+- Architecture: Microservices, REST, gRPC
+
+EXPERIENCE
+Senior SRE, CloudKite (2020 - Present)
+- Run multi-region Kubernetes clusters for 80 microservices.
+- Built Terraform modules and GitHub Actions pipelines.
+- Reduced incident MTTR with Prometheus alerts and Grafana dashboards.
+
+DevOps Engineer, HafenSoft (2017 - 2020)
+- Automated Docker deployments and PostgreSQL backups.
+
+EDUCATION
+B.Sc., Computer Science - Technical University of Berlin (2017)

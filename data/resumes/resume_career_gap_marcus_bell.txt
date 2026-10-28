@@ -1,0 +1,34 @@
+Marcus Bell
+Senior Backend Engineer
+marcus.bell@example.com | +1 (312) 555-0102 | Chicago, USA
+
+SUMMARY
+Backend engineer with 8 years of experience building Python services and
+cloud infrastructure. Took a planned two-year career break (2022-2024) for
+family caregiving and am now returning to full-time work.
+
+SKILLS
+Languages: Python, Go, SQL
+Frameworks: FastAPI, Django, Flask
+Cloud: AWS (ECS, Lambda, RDS), GCP (Cloud Run, Pub/Sub)
+Infrastructure: Docker, Kubernetes, Terraform, GitHub Actions CI/CD
+Data: PostgreSQL, Redis, DynamoDB
+Messaging: RabbitMQ, SQS, Kafka
+Architecture: Microservices, REST, gRPC, distributed systems
+Observability: Prometheus, Grafana
+
+EXPERIENCE
+Staff Backend Engineer, LoamPay (2018 - 2022)
+- Designed payment microservices in Python handling 3M requests/day.
+- Led Kubernetes migration and Terraform-based infrastructure.
+- Built gRPC services and Kafka event pipelines.
+
+Senior Software Engineer, Beacon Systems (2015 - 2018)
+- Built REST APIs and PostgreSQL data models for logistics customers.
+- Introduced CI/CD with Jenkins and Docker.
+
+CAREER BREAK
+Family caregiving (2022 - 2024)
+
+EDUCATION
+B.Sc., Computer Science - University of Illinois (2015)

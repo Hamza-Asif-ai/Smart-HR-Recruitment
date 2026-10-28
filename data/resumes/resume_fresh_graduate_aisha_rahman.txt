@@ -1,0 +1,28 @@
+Aisha Rahman
+Junior Software Engineer
+aisha.rahman@example.com | +1 (416) 555-0101 | Toronto, Canada
+
+SUMMARY
+Recent Computer Science graduate (2025) seeking a junior backend role. One
+internship and several academic projects using Python, SQL, and Docker.
+About one year of hands-on experience.
+
+TECHNICAL SKILLS
+- Languages: Python, JavaScript, SQL
+- Frameworks: Flask, FastAPI (coursework), React
+- Databases: PostgreSQL, SQLite
+- Tools: Git, Docker, GitHub Actions
+- Cloud: basic AWS (EC2, S3)
+
+PROJECTS
+Campus Course Planner, Capstone (2025)
+- Built a Flask REST API backed by PostgreSQL and containerized it with Docker.
+- Wrote unit tests and a GitHub Actions pipeline.
+
+EXPERIENCE
+Software Engineering Intern, Northwind Labs (May 2024 - Aug 2024)
+- Added Python endpoints to an internal Flask service.
+- Wrote SQL reports for the operations team.
+
+EDUCATION
+B.Sc., Computer Science - University of Toronto (2025)

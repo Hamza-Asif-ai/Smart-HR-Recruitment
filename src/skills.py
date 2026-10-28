@@ -214,7 +214,7 @@ def email_drafter_skill(
     candidate: Dict[str, Any],
     role_title: str,
     company: str = "NimbusPay Technologies",
-    recruiter_name: str = "Fiza Asif",
+    recruiter_name: str = "Alex Morgan",
     slot: str = "",
 ) -> Dict[str, Any]:
     """Draft a personalized interview invitation email for a candidate.

@@ -1,0 +1,21 @@
+Maya Singh
+Registered Nurse
+maya.singh@example.com | +1 (312) 555-0113 | Chicago, USA
+
+SUMMARY
+Registered nurse with 6 years of experience in acute care. Interested in
+healthcare technology but no professional software engineering experience.
+
+SKILLS
+- Clinical: triage, patient education, electronic health records
+- Communication: team coordination, documentation
+- Tools: Microsoft Excel, Microsoft Word
+
+EXPERIENCE
+Registered Nurse, Lakeview Hospital (2019 - Present)
+- Provide direct patient care in a 30-bed medical unit.
+- Train new nurses on electronic health record workflows.
+
+EDUCATION
+B.S.N., Nursing - Example University (2019)
+Registered Nurse License, State of Illinois

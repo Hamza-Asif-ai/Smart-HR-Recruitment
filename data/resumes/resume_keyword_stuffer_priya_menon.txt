@@ -1,0 +1,22 @@
+Priya Menon
+Full Stack Cloud Engineer
+priya.menon@example.com | +1 (206) 555-0103 | Remote
+
+SUMMARY
+Results-driven ninja rockstar engineer.
+
+KEYWORDS
+Python, Python3, Django, Flask, FastAPI, Java, JavaScript, TypeScript,
+Node.js, React, Angular, Vue, SQL, PostgreSQL, MySQL, MongoDB, Redis,
+AWS, EC2, S3, Lambda, ECS, EKS, GCP, Azure, Docker, Kubernetes, k8s,
+Terraform, Ansible, Jenkins, GitHub Actions, CI/CD, Kafka, RabbitMQ,
+gRPC, REST, GraphQL, Microservices, Distributed Systems, Prometheus,
+Grafana, Datadog, Machine Learning, TensorFlow, Blockchain, Agile, Scrum.
+
+EXPERIENCE
+Software Engineer, KeywordWorks (2021 - Present)
+- Maintained an internal CRUD application.
+- Attended daily standups and updated tickets.
+
+EDUCATION
+B.Sc., Information Systems - Example State University (2021)

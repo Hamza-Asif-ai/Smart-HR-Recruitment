@@ -1,0 +1,28 @@
+José Álvarez
+Ingeniero Backend Senior
+jose.alvarez@example.com | +34 91 555 0104 | Madrid, España
+
+RESUMEN
+Ingeniero backend con 6 años de experiencia diseñando servicios Python y
+plataformas cloud para el sector fintech.
+
+HABILIDADES
+- Lenguajes: Python, Go, SQL
+- Cloud: GCP (Cloud Run, Pub/Sub, BigQuery), AWS
+- Infraestructura: Docker, Kubernetes, Terraform, CI/CD (GitHub Actions)
+- Datos: PostgreSQL, Redis
+- APIs: REST, gRPC, Protocol Buffers
+- Arquitectura: Microservicios, sistemas distribuidos, Kafka
+- Observabilidad: Prometheus, Grafana
+
+EXPERIENCIA
+Senior Backend Engineer, PagoSur (2020 - Present)
+- Construí microservicios Python que procesan 2M de pagos al día.
+- Migré servicios a GCP Cloud Run y reduje la latencia un 35%.
+- Diseñé APIs gRPC y modelos PostgreSQL.
+
+Backend Engineer, TiendaFácil (2018 - 2020)
+- Desarrollé APIs REST en Django y pipelines de eventos con Kafka.
+
+EDUCACIÓN
+M.Sc., Ingeniería Informática - Universidad Politécnica de Madrid (2018)

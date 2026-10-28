@@ -68,6 +68,12 @@ os.environ.setdefault("HR_DATA_ROOT", "./data")
 _runner = None
 _session_service = None
 
+
+def _has_llm_api_key():
+    """True when either the ADK-native or legacy Gemini env var is set."""
+    return bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
+
+
 def _init_agent_runner():
     """Initialize ADK runner and session service."""
     global _runner, _session_service
@@ -350,22 +356,11 @@ ul.options li.selected, li.item.selected {
 
 
 
-LINKEDIN_URL = "https://linkedin.com/in/hamzaasif-ai"
-GITHUB_URL = "https://github.com/Hamza-Asif-ai"
-
-_LI_SVG = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>')
-_GH_SVG = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>')
-
-
 def creator_credit_html():
-    """'Made by' line with clickable LinkedIn / GitHub pills (open in a new tab)."""
+    """Generic project credit (no personal profiles or contact details)."""
     return (
         '<div class="credit-line">'
-        '<span>Designed &amp; built by <b>Hamza Asif</b></span>'
-        f'<a class="social-pill li" href="{LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" '
-        f'title="linkedin.com/in/hamzaasif-ai">{_LI_SVG}LinkedIn</a>'
-        f'<a class="social-pill gh" href="{GITHUB_URL}" target="_blank" rel="noopener noreferrer" '
-        f'title="github.com/Hamza-Asif-ai">{_GH_SVG}GitHub</a>'
+        '<span>Smart HR Recruitment · built with Google ADK</span>'
         '</div>'
     )
 
@@ -650,13 +645,7 @@ def handle_reschedule(email, state):
     if "replies_status" not in new_state or not isinstance(new_state.get("replies_status"), dict):
         new_state["replies_status"] = {}
     new_state["replies_status"][email_clean] = "Reschedule Requested"
-    # Try to use email agent if available
-    try:
-        if ADK_IMPORTS_AVAILABLE and os.environ.get("GEMINI_API_KEY") and agents_mod and hasattr(agents_mod, 'build_email_agent'):
-            pass  # Agent available for drafting
-    except Exception:
-        pass
-    return (f'<div class="status-line info">📅 Reschedule request noted for { _html.escape(email) }. Email agent will draft a response.</div>', new_state)
+    return (f'<div class="status-line info">📅 Reschedule request recorded for { _html.escape(email) }.</div>', new_state)
 
 
 def handle_decline(email, state):
@@ -735,7 +724,7 @@ def check_replies(sender_email, app_password, emails_state=None):
         # Try to use reply_classifier_agent if available
         intent = "unknown"
         try:
-            if ADK_IMPORTS_AVAILABLE and os.environ.get("GEMINI_API_KEY") and agents_mod and hasattr(agents_mod, 'build_reply_classifier_agent'):
+            if ADK_IMPORTS_AVAILABLE and _has_llm_api_key() and agents_mod and hasattr(agents_mod, 'build_reply_classifier_agent'):
                 body_l = r["body"].lower()
                 if any(k in body_l for k in ["yes", "confirm", "available", "accept", "sure"]):
                     intent = "confirm"
@@ -1276,7 +1265,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     
     agent_result = None
     try:
-        if ADK_IMPORTS_AVAILABLE and os.environ.get("GEMINI_API_KEY"):
+        if ADK_IMPORTS_AVAILABLE and _has_llm_api_key():
             budget.budget_tracker.check_budget()
             try:
                 agent_result = asyncio.run(run_agent_async(goal, context))
@@ -1456,11 +1445,11 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     # The HR's own default invitation text lives in THEIR browser (localStorage). storage_key and
     # secret must be fixed: left random they change on every server restart (Render sleeps a lot)
     # and the saved text would become unreadable.
-    if hasattr(gr, "BrowserState"):
+    browser_state_secret = os.environ.get("BROWSER_STATE_SECRET")
+    if hasattr(gr, "BrowserState") and browser_state_secret:
         saved_default_state = gr.BrowserState(
-            "", storage_key="smart_hr_invite_default_v2",
-            secret=os.environ.get("BROWSER_STATE_SECRET", "smart-hr-invite-template-v1"))
-    else:                                   # very old Gradio: works for this session only
+            "", storage_key="smart_hr_invite_default_v2", secret=browser_state_secret)
+    else:  # no secret configured (or very old Gradio): session-only state
         saved_default_state = gr.State("")
     inbox_state = gr.State({"title": "", "candidates": []})
     pending_drafts_state = gr.State([])
@@ -1486,9 +1475,8 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
       </div>
     """ + creator_credit_html())
 
-    # Show error only if GEMINI_API_KEY is missing (no success banner when it is present)
-    if not os.environ.get("GEMINI_API_KEY"):
-        gr.HTML('<div class="status-line err">⚠ GEMINI_API_KEY is missing. The system fell back to the old regex-based pipeline. Set GEMINI_API_KEY to enable agentic features.</div>')
+    if not _has_llm_api_key():
+        gr.HTML('<div class="status-line err">⚠ No Gemini API key found. The deterministic offline pipeline will be used. Set GOOGLE_API_KEY to enable live ADK agents.</div>')
 
     gr.Markdown("### 🎯 What are you hiring for?  \nCandidates are detected, ranked, shortlisted and recommended against these requirements.")
     with gr.Row():
@@ -1536,7 +1524,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             "really did arrive (just in the other inbox)."
         )
         with gr.Row():
-            gmail_email_in = gr.Textbox(label="Gmail address (same as Brevo sender email below)", placeholder="you@gmail.com")
+            gmail_email_in = gr.Textbox(label="Gmail address (same as Brevo sender email below)", placeholder="you@example.com")
             with gr.Column(scale=1):
                 gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
                 show_gmail_pwd = gr.Checkbox(label="Show Password", value=False)
@@ -1639,7 +1627,6 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     </script>
     """)
     replies_action_status_html = gr.HTML("", elem_id="replies-action-status")
-    gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
@@ -1680,15 +1667,7 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     )
     demo.load(update_trace_table, inputs=[trace_state], outputs=[trace_table])
 
-    gr.HTML("""
-      <div id="credit-footer">
-        <div class="made-by">Made by <b>Hamza Asif</b></div>
-        <div class="credit-links">
-          <a href="https://linkedin.com/in/hamzaasif-ai" target="_blank" rel="noopener">🔗 LinkedIn</a>
-          <a href="https://github.com/Hamza-Asif-ai" target="_blank" rel="noopener">💻 GitHub</a>
-        </div>
-      </div>
-    """)
+    gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))

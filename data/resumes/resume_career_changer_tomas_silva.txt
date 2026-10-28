@@ -1,0 +1,28 @@
+Tomás Silva
+Backend Developer
+tomas.silva@example.com | +55 11 5550 0114 | São Paulo, Brazil
+
+SUMMARY
+Career changer moving from technical support to backend development. Completed
+a 9-month software engineering bootcamp and built Python projects.
+
+SKILLS
+- Languages: Python, SQL
+- Frameworks: Flask, FastAPI
+- Databases: PostgreSQL, Redis
+- Tools: Git, Docker, GitHub Actions
+- Cloud: basic GCP (Cloud Run)
+
+PROJECTS
+Invoice API (2025)
+- Built a FastAPI REST service with PostgreSQL and Docker.
+- Added CI with GitHub Actions and unit tests.
+
+EXPERIENCE
+Technical Support Specialist, HelpDesk Brasil (2018 - 2024)
+- Debugged customer integrations and wrote SQL reports.
+- Automated repetitive tasks with Python scripts.
+
+EDUCATION
+Software Engineering Bootcamp - Example Academy (2025)
+B.A., Business Administration - Example University (2017)
