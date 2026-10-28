@@ -29,15 +29,50 @@ from typing import Any, Dict, Iterable
 # PII masking
 # --------------------------------------------------------------------------- #
 
-# Pre-compiled patterns for common PII. Order matters: emails before phones,
-# because an email can contain digit sequences that look phone-like.
+# Pre-compiled patterns for common PII. Order matters: emails before URLs and
+# phones, because an email can contain digit sequences that look phone-like.
 _PII_PATTERNS: Dict[str, re.Pattern] = {
     "EMAIL": re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
-    "PHONE": re.compile(
-        r"(?<!\w)(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?){2,4}\d{2,4}(?!\w)"
+    "URL": re.compile(
+        r"\b(?:https?://|www\.)\S+"
+        r"|\b(?:[A-Za-z0-9-]+\.)+(?:com|io|dev|ai|me|co|net|org|in|uk|sg|app|tech|xyz|site)"
+        r"(?:/\S*)?",
+        re.IGNORECASE,
     ),
-    "URL": re.compile(r"\b(?:https?://|www\.)?[A-Za-z0-9.-]+\.(?:com|io|dev|in|uk|sg)\b/?\S*"),
+    "TRACEBACK": re.compile(r"Traceback \(most recent call last\):.*", re.IGNORECASE | re.DOTALL),
+    "TRACEBACK_FRAME": re.compile(
+        r'File\s+"[^"]+",\s+line\s+\d+(?:,\s+in\s+[^\n]+)?',
+        re.IGNORECASE,
+    ),
+    "WINDOWS_PATH": re.compile(r"\b[A-Za-z]:\\[^\s\"']+"),
+    "UNIX_HOME_PATH": re.compile(
+        r"(?<![\w:])/(?:home|Users)/[^/\s\"']+(?:/[^\s\"']*)?"
+    ),
+    "PHONE": re.compile(
+        r"(?<![\w+])(?:\+\d{1,3}[\s.-]?)?"
+        r"(?:\(?\d{1,5}\)?[\s.-]?){2,3}\d{2,5}(?![\w])"
+    ),
 }
+
+_YEAR_RANGE_ONLY_RE = re.compile(
+    r"^(?:19|20)\d{2}\s*[-–—]\s*(?:19|20)\d{2}$"
+)
+
+
+def _looks_like_phone(value: str) -> bool:
+    """Reject years and plain digit runs so the phone rule only masks phones."""
+    digits = re.sub(r"\D", "", value)
+    if not 7 <= len(digits) <= 15:
+        return False
+    if _YEAR_RANGE_ONLY_RE.fullmatch(value.strip()):
+        return False
+    # Require an international prefix or phone punctuation; bare numbers stay.
+    return value.lstrip().startswith("+") or bool(re.search(r"[().\s-]", value))
+
+
+def _mask_phone(match: re.Match) -> str:
+    value = match.group(0)
+    return "[PHONE]" if _looks_like_phone(value) else value
 
 
 def mask_pii(text: str, mask_names: bool = False) -> str:
@@ -62,9 +97,13 @@ def mask_pii(text: str, mask_names: bool = False) -> str:
                 break
         masked = "\n".join(lines)
 
+    masked = _PII_PATTERNS["TRACEBACK"].sub("[TRACEBACK]", masked)
+    masked = _PII_PATTERNS["TRACEBACK_FRAME"].sub("[TRACEBACK]", masked)
     masked = _PII_PATTERNS["EMAIL"].sub("[EMAIL]", masked)
     masked = _PII_PATTERNS["URL"].sub("[URL]", masked)
-    masked = _PII_PATTERNS["PHONE"].sub("[PHONE]", masked)
+    masked = _PII_PATTERNS["WINDOWS_PATH"].sub("[PATH]", masked)
+    masked = _PII_PATTERNS["UNIX_HOME_PATH"].sub("[PATH]", masked)
+    masked = _PII_PATTERNS["PHONE"].sub(_mask_phone, masked)
     return masked
 
 

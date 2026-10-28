@@ -90,7 +90,6 @@ This installs everything the project needs:
 | `pypdf` | Parses PDF resumes (normal, scanned, hidden-text) | Core |
 | `gradio` | Local demo UI (`app.py`) | Core |
 | `pillow` | Generates the synthetic PDF fixtures | Core |
-| `chromadb` | Optional vector memory; JSON fallback if absent | Optional |
 
 Versions are pinned in `requirements.txt`. `requirements-dev.txt` adds `pytest`.
 
@@ -127,6 +126,17 @@ Run the MCP filesystem server standalone:
 ```powershell
 python -m src.mcp_filesystem_server --root ./data
 ```
+
+Optional tuning variables (sensible defaults are built in):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SHORTLIST_THRESHOLD` | `75` | Minimum match % to shortlist |
+| `REVIEW_THRESHOLD` | `55` | Minimum match % for manual review |
+| `INTERVIEW_TIMEZONE` | `Asia/Kolkata` | IANA timezone for proposed slots |
+
+Set them the same way as `HR_DATA_ROOT` (for example
+`$env:SHORTLIST_THRESHOLD="80"`).
 
 ---
 

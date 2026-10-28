@@ -26,14 +26,15 @@ import uuid
 from collections import Counter
 from typing import Any, Dict, List
 
+from . import config
 from . import mcp_filesystem_server as fs
 from . import skills
 from .sanitize import sanitize_untrusted_text
-from .security import SecurityContext, Role, get_secure_logger, safe_preview
+from .security import SecurityContext, Role, get_secure_logger, mask_pii, safe_preview
 
 log = get_secure_logger("smart_hr.orchestrator")
 
-SHORTLIST_THRESHOLD = 70.0  # match_percent required to advance to interview
+SHORTLIST_THRESHOLD = config.SHORTLIST_THRESHOLD
 
 
 class AgenticUnavailable(RuntimeError):
@@ -82,8 +83,13 @@ def run_resume_screener(ctx: SecurityContext, requirements: Dict[str, Any]) -> L
                  safe_preview(clean, mask_names=True))
         profile = skills.resume_parser_skill(clean, source_id=fname)
         result = skills.candidate_scorer_skill(profile, requirements)
-        # Carry contact info forward (only an authorized role can later unmask).
-        result["email"] = profile["email"]
+        # Carry contact info forward, masked unless the role may see it.
+        if ctx.can("view_unmasked_pii"):
+            result["email"] = profile["email"]
+            result["name"] = profile["name"]
+        else:
+            result["email"] = mask_pii(profile["email"])
+            result["name"] = mask_pii(profile["name"], mask_names=True)
         result["skills"] = profile["skills"]
         scored.append(result)
 
@@ -124,7 +130,16 @@ def run_scheduler(ctx: SecurityContext, ranked: List[Dict[str, Any]],
 # --------------------------------------------------------------------------- #
 def run_insights(ctx: SecurityContext, requirements: Dict[str, Any],
                  ranked: List[Dict[str, Any]], emails: List[Dict[str, Any]]) -> Dict[str, Any]:
-    ctx.authorize("write_report")
+    may_write = ctx.can("write_report")
+    if may_write:
+        ctx.authorize("write_report")
+    else:
+        ctx.audit_log.append({
+            "user": ctx.user,
+            "role": ctx.role.value,
+            "capability": "write_report",
+            "granted": False,
+        })
 
     total = len(ranked)
     shortlisted = len(emails)
@@ -150,10 +165,16 @@ def run_insights(ctx: SecurityContext, requirements: Dict[str, Any],
         "candidate_labels": [c["name"].split()[0] for c in ranked],
     }
 
-    report_md = _render_report(metrics, ranked)
-    path = fs.save_report("recruitment_insights.md", report_md)
-    metrics["report_path"] = path
-    log.info("Insights: report saved to %s", path)
+    if may_write:
+        report_md = _render_report(metrics, ranked)
+        path = fs.save_report("recruitment_insights.md", report_md)
+        metrics["report_path"] = path
+        metrics["report_skipped"] = False
+        log.info("Insights: report saved to %s", path)
+    else:
+        metrics["report_path"] = None
+        metrics["report_skipped"] = True
+        log.info("Insights: report writing skipped (role lacks 'write_report')")
     return metrics
 
 
@@ -212,7 +233,17 @@ def run_pipeline(role: str = "recruiter", jd_filename: str = "",
     ctx = SecurityContext(user="pipeline_runner", role=Role(role))
     requirements = run_jd_agent(ctx, jd_filename)
     ranked = run_resume_screener(ctx, requirements)
-    emails = run_scheduler(ctx, ranked, role_title=requirements["title"])
+    if ctx.can("send_invitations"):
+        emails = run_scheduler(ctx, ranked, role_title=requirements["title"])
+    else:
+        emails = []
+        ctx.audit_log.append({
+            "user": ctx.user,
+            "role": ctx.role.value,
+            "capability": "send_invitations",
+            "granted": False,
+        })
+        log.info("Scheduler: skipped (role lacks 'send_invitations')")
     insights = run_insights(ctx, requirements, ranked, emails)
 
     log.info("=== Pipeline complete ===")

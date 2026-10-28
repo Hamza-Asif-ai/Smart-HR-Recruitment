@@ -22,6 +22,9 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from . import config
 
 # --------------------------------------------------------------------------- #
 # Skill taxonomy: a controlled vocabulary of skills + aliases. Using a
@@ -30,7 +33,7 @@ from typing import Dict, List, Any
 # --------------------------------------------------------------------------- #
 SKILL_VOCAB: Dict[str, List[str]] = {
     "python": ["python", "fastapi", "django", "flask", "pandas", "numpy"],
-    "go": ["golang", "go "],
+    "go": ["golang", "go"],
     "java": ["java"],
     "javascript": ["javascript", "typescript", "node.js", "nodejs", "react", "express"],
     "sql": ["sql", "postgresql", "postgres", "mysql"],
@@ -48,6 +51,10 @@ SKILL_VOCAB: Dict[str, List[str]] = {
     "messaging": ["kafka", "rabbitmq", "pub/sub", "pubsub", "sqs", "message queue"],
     "ci/cd": ["ci/cd", "cicd", "github actions", "jenkins", "gitlab ci"],
     "observability": ["prometheus", "grafana", "observability", "monitoring"],
+    "r": ["r"],
+    "c": ["c"],
+    "excel": ["excel"],
+    "word": ["word"],
 }
 
 _DEGREE_RE = re.compile(
@@ -56,30 +63,143 @@ _DEGREE_RE = re.compile(
 )
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?){2,4}\d{2,4}")
-_YEARS_RE = re.compile(r"(\d{1,2})\s*\+?\s*years", re.IGNORECASE)
+
+_AMBIGUOUS_SKILLS = {"go", "r", "c", "excel", "word"}
+_PROGRAMMING_CONTEXT_RE = re.compile(
+    r"(?:knowledge of|experience (?:with|in)|proficiency in|familiarity with|"
+    r"programming(?: language)?|developer|engineer|language)\b[^\n]{0,60}$",
+    re.IGNORECASE,
+)
+
+
+def _alias_pattern(alias: str) -> str:
+    """Whole-token alias pattern; allows a simple plural suffix only."""
+    escaped = re.escape(alias.strip())
+    if escaped and escaped[-1].isalnum():
+        return rf"(?<![a-z0-9]){escaped}s?(?![a-z0-9])"
+    return rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+
+
+def _contains_alias(text: str, alias: str) -> bool:
+    return bool(re.search(_alias_pattern(alias), text, re.IGNORECASE))
+
+
+def _ambiguous_present(canonical: str, text: str, skills_text: str) -> bool:
+    """Ambiguous words (go/r/c/excel/word) need list or programming context."""
+    aliases = SKILL_VOCAB[canonical]
+    if canonical == "go" and _contains_alias(text, "golang"):
+        return True
+
+    # A dedicated skills list is the strongest possible context.
+    if any(_contains_alias(skills_text, alias) for alias in aliases):
+        return True
+
+    # Bullet/list entries ("- Go", "- R", "- Microsoft Excel") are list context.
+    for alias in aliases:
+        if re.search(rf"(?m)^\s*[-*•]\s*{_alias_pattern(alias)}\s*$", text, re.IGNORECASE):
+            return True
+
+    if canonical in {"excel", "word"}:
+        esc = re.escape(canonical)
+        return bool(re.search(
+            rf"(?<![a-z0-9])(?:microsoft|ms)\s+{esc}s?(?![a-z0-9])",
+            text,
+            re.IGNORECASE,
+        ))
+
+    for alias in aliases:
+        for match in re.finditer(_alias_pattern(alias), text, re.IGNORECASE):
+            prefix = text[max(0, match.start() - 80):match.start()]
+            if _PROGRAMMING_CONTEXT_RE.search(prefix):
+                return True
+    return False
 
 
 def _detect_skills(text: str) -> List[str]:
-    """Return the canonical skills present in ``text`` using the vocabulary."""
+    """Return canonical skills present in ``text`` using whole-token matching."""
     low = text.lower()
+    skills_text = _split_sections(text).get("skills", "").lower()
     found = []
     for canonical, aliases in SKILL_VOCAB.items():
-        if any(alias in low for alias in aliases):
+        if canonical in _AMBIGUOUS_SKILLS:
+            if _ambiguous_present(canonical, low, skills_text):
+                found.append(canonical)
+        elif any(_contains_alias(low, alias) for alias in aliases):
             found.append(canonical)
     return sorted(set(found))
 
 
+_YEAR_RANGE_RE = re.compile(
+    r"\b((?:19|20)\d{2})\s*(?:-|–|—|to|until)\s*"
+    r"(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?)\.?,?\s*)?"
+    r"((?:19|20)\d{2}|present|current|now)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_YEARS_RE = re.compile(r"\b(\d{1,2}(?:\.\d)?)\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
+_EDU_LINE_RE = re.compile(
+    r"\b(university|college|bachelors?|bsc|b\.sc|msc|m\.sc|mba|ph\.?d|matric|"
+    r"intermediate|fsc|cgpa|gpa)\b",
+    re.IGNORECASE,
+)
+
+
+def _without_education(text: str) -> str:
+    """Drop education blocks/headings so degree dates are not counted as jobs."""
+    kept: List[str] = []
+    in_education = False
+    for line in text.splitlines():
+        heading = _section_heading(line)
+        if heading:
+            in_education = heading == "education"
+            continue
+        if in_education or _EDU_LINE_RE.search(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def estimate_experience_years(text: str) -> float:
+    """Estimate professional experience, merging overlapping dated roles."""
+    if not text:
+        return 0.0
+
+    working_text = _without_education(text)
+    explicit = [
+        float(value)
+        for value in _EXPLICIT_YEARS_RE.findall(working_text)
+        if float(value) <= 45
+    ]
+
+    this_year = datetime.now().year
+    spans = []
+    for start_raw, end_raw in _YEAR_RANGE_RE.findall(working_text):
+        start = int(start_raw)
+        end = this_year if not end_raw.isdigit() else int(end_raw)
+        if start <= end <= this_year + 1 and end - start <= 40:
+            spans.append((start, end))
+
+    spans.sort()
+    total = 0.0
+    current = None
+    for start, end in spans:
+        if current is None:
+            current = [start, end]
+        elif start <= current[1]:
+            current[1] = max(current[1], end)
+        else:
+            total += max(current[1] - current[0], 0)
+            current = [start, end]
+    if current is not None:
+        total += max(current[1] - current[0], 0)
+
+    return round(min(max(max(explicit, default=0.0), total), 40.0), 1)
+
+
 def _estimate_years(text: str) -> int:
-    """Best-effort estimate of years of experience from free text."""
-    matches = [int(m) for m in _YEARS_RE.findall(text)]
-    if matches:
-        return max(matches)
-    # Fall back to scanning year ranges like "2017 - Present".
-    years = [int(y) for y in re.findall(r"(19|20)\d{2}", text)]
-    if len(years) >= 2:
-        span = datetime.now().year - min(years)
-        return max(0, min(span, 40))
-    return 0
+    """Backward-compatible integer wrapper around ``estimate_experience_years``."""
+    return int(round(estimate_experience_years(text)))
 
 
 _SECTION_ALIASES = {
@@ -156,7 +276,7 @@ def resume_parser_skill(resume_text: str, source_id: str = "") -> Dict[str, Any]
         "phone": phone_m.group().strip() if phone_m else "",
         "skills": _detect_skills(resume_text),
         "experienced_skills": _detect_skills(experience_text),
-        "experience_years": _estimate_years(resume_text),
+        "experience_years": estimate_experience_years(resume_text),
         "education": degrees,
         "parse_status": parse_status,
         "parse_warnings": [] if parse_status == "ok" else [
@@ -168,26 +288,102 @@ def resume_parser_skill(resume_text: str, source_id: str = "") -> Dict[str, Any]
 # --------------------------------------------------------------------------- #
 # SKILL 2: jd_parser_skill
 # --------------------------------------------------------------------------- #
+_JD_REQUIRED_HEADINGS = {
+    "required", "required skills", "required qualifications", "requirements",
+    "must have", "must haves", "must-have", "minimum qualifications",
+    "minimum requirements", "essential skills", "essential criteria",
+}
+_JD_NICE_HEADINGS = {
+    "nice to have", "nice-to-have", "nice to haves", "preferred",
+    "preferred qualifications", "preferred skills", "bonus", "bonus points",
+    "good to have", "desirable", "desirable skills", "plus", "a plus",
+}
+_JD_OTHER_HEADINGS = {
+    "about the role", "about us", "responsibilities", "key responsibilities",
+    "what you will do", "what you'll do", "qualifications", "employment type",
+    "experience level", "benefits", "who you are", "the role",
+}
+_ANY_OF_RE = re.compile(
+    r"\b(?:at least one|any one of|any of|one of|one or more)\b", re.IGNORECASE
+)
+
+
+def _normalized_heading(line: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z ]", " ", line.lower())).strip()
+
+
+def _jd_sections(text: str) -> Dict[str, str]:
+    blocks: Dict[str, List[str]] = {"header": []}
+    current = "header"
+    for line in text.splitlines():
+        heading = _normalized_heading(line)
+        if heading in _JD_REQUIRED_HEADINGS:
+            current = "required"
+        elif heading in _JD_NICE_HEADINGS:
+            current = "nice"
+        elif heading in _JD_OTHER_HEADINGS or (
+            line.rstrip().endswith(":") and 0 < len(heading.split()) <= 6
+        ):
+            current = "other"
+        else:
+            blocks.setdefault(current, []).append(line)
+    return {name: "\n".join(lines).strip() for name, lines in blocks.items()}
+
+
+def _any_of_skill_groups(text: str) -> List[List[str]]:
+    groups: List[List[str]] = []
+    for line in text.splitlines():
+        if not _ANY_OF_RE.search(line):
+            continue
+        options = _detect_skills(line)
+        if len(options) >= 2 and options not in groups:
+            groups.append(sorted(options))
+    return groups
+
+
+def _jd_min_years(text: str) -> int:
+    values = [
+        int(value)
+        for value in re.findall(
+            r"\b(\d{1,2})(?:\s*[-–—]\s*\d{1,2})?\+?\s*(?:years?|yrs?)\b",
+            text,
+            re.IGNORECASE,
+        )
+    ]
+    return max(values, default=0)
+
+
 def jd_parser_skill(jd_text: str) -> Dict[str, Any]:
     """Extract structured requirements from a job description.
 
-    Returns a dict with title, required_skills, nice_to_have, min_years,
-    seniority, and qualifications.
+    Required skills come only from an explicit Required/Requirements section;
+    Nice-to-have skills come only from Nice/Preferred/Bonus sections. Lines such
+    as "at least one cloud platform (GCP/AWS/Azure)" become an any-of group.
     """
     low = jd_text.lower()
 
     title_m = re.search(r"job title:\s*(.+)", jd_text, re.IGNORECASE)
     title = title_m.group(1).strip() if title_m else (jd_text.splitlines()[0].strip() if jd_text else "Role")
 
-    # Split into "required" vs "nice to have" regions for weighting.
-    nice_idx = low.find("nice to have")
-    required_region = low[:nice_idx] if nice_idx != -1 else low
-    nice_region = low[nice_idx:] if nice_idx != -1 else ""
+    sections = _jd_sections(jd_text)
+    required_region = sections.get("required", "")
+    if not required_region.strip():
+        required_region = sections.get("header", "") or jd_text
+    nice_region = sections.get("nice", "")
 
-    required_skills = _detect_skills(required_region)
-    nice_to_have = [s for s in _detect_skills(nice_region) if s not in required_skills]
+    required_groups = _any_of_skill_groups(required_region)
+    grouped_skills = {skill for group in required_groups for skill in group}
 
-    min_years = _estimate_years(jd_text)
+    required_skills = [
+        skill for skill in _detect_skills(required_region)
+        if skill not in grouped_skills
+    ]
+    nice_to_have = [
+        skill for skill in _detect_skills(nice_region)
+        if skill not in required_skills and skill not in grouped_skills
+    ]
+
+    min_years = _jd_min_years(jd_text)
     seniority = "senior" if ("senior" in low or min_years >= 5) else (
         "mid" if min_years >= 2 else "junior"
     )
@@ -196,6 +392,7 @@ def jd_parser_skill(jd_text: str) -> Dict[str, Any]:
     return {
         "title": title,
         "required_skills": required_skills,
+        "required_skill_groups": required_groups,
         "nice_to_have": nice_to_have,
         "min_years": min_years,
         "seniority": seniority,
@@ -206,6 +403,28 @@ def jd_parser_skill(jd_text: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # SKILL 3: candidate_scorer_skill
 # --------------------------------------------------------------------------- #
+NICE_TO_HAVE_WEIGHT = 0.10
+
+
+def recommendation_for_score(
+    match: float,
+    keyword_stuffing_suspected: bool = False,
+    shortlistable: bool = True,
+) -> str:
+    """Map a score to the shared shortlist/review/reject recommendation."""
+    if not shortlistable:
+        return "Unreadable resume - manual review"
+    if keyword_stuffing_suspected:
+        if match >= config.REVIEW_THRESHOLD:
+            return "Possible match - review (keyword stuffing suspected)"
+        return "Weak match - likely reject (keyword stuffing suspected)"
+    if match >= config.SHORTLIST_THRESHOLD:
+        return "Strong match - shortlist"
+    if match >= config.REVIEW_THRESHOLD:
+        return "Possible match - review"
+    return "Weak match - likely reject"
+
+
 def candidate_scorer_skill(
     candidate: Dict[str, Any],
     requirements: Dict[str, Any],
@@ -224,17 +443,36 @@ def candidate_scorer_skill(
     Returns a dict with match_percent (0-100) and an explainable breakdown.
     """
     req_skills = set(requirements.get("required_skills", []))
+    required_groups = [
+        set(group) for group in requirements.get("required_skill_groups", [])
+        if group
+    ]
     nice_skills = set(requirements.get("nice_to_have", []))
     cand_skills = set(candidate.get("skills", []))
     experienced_skills = set(candidate.get("experienced_skills", []))
 
-    matched_req = sorted(req_skills & cand_skills)
-    matched_req_experience = sorted(req_skills & experienced_skills)
+    matched_groups = [sorted(group & cand_skills) for group in required_groups
+                      if group & cand_skills]
+    missing_groups = [sorted(group) for group in required_groups
+                      if not group & cand_skills]
+    group_matches = {skill for hit in matched_groups for skill in hit}
+    group_experience = {
+        skill for group in required_groups
+        for skill in (group & experienced_skills)
+    }
+
+    matched_req = sorted((req_skills & cand_skills) | group_matches)
+    matched_req_experience = sorted((req_skills & experienced_skills) | group_experience)
     missing_req = sorted(req_skills - cand_skills)
     matched_nice = sorted(nice_skills & cand_skills)
 
-    listed_cov = len(matched_req) / len(req_skills) if req_skills else 1.0
-    evidence_cov = len(matched_req_experience) / len(req_skills) if req_skills else 1.0
+    total_required_units = len(req_skills) + len(required_groups)
+    listed_hits = len(req_skills & cand_skills) + len(matched_groups)
+    evidence_hits = len(req_skills & experienced_skills) + sum(
+        1 for group in required_groups if group & experienced_skills
+    )
+    listed_cov = listed_hits / total_required_units if total_required_units else 1.0
+    evidence_cov = evidence_hits / total_required_units if total_required_units else 1.0
     skill_score = 0.5 * listed_cov + 0.5 * evidence_cov
     nice_cov = len(matched_nice) / len(nice_skills) if nice_skills else 0.0
 
@@ -246,7 +484,7 @@ def candidate_scorer_skill(
 
     match = 100.0 * (
         0.50 * skill_score
-        + 0.10 * nice_cov
+        + NICE_TO_HAVE_WEIGHT * nice_cov
         + 0.25 * exp_score
         + 0.05 * edu_score
         + 0.10 * evidence_cov
@@ -255,31 +493,20 @@ def candidate_scorer_skill(
 
     parse_status = candidate.get("parse_status", "ok")
     shortlistable = parse_status != "unreadable"
+    matched_units = len(req_skills & cand_skills) + len(matched_groups)
     evidence_ratio = (
-        len(matched_req_experience) / len(matched_req) if matched_req else 0.0
+        evidence_hits / matched_units if matched_units else 0.0
     )
     keyword_stuffing_suspected = (
         len(cand_skills) >= 12
         and listed_cov >= 0.8
         and evidence_cov < 0.35
     )
-
-    if not shortlistable:
-        recommendation = "Unreadable resume - manual review"
-    elif keyword_stuffing_suspected:
-        recommendation = (
-            "Possible match - review (keyword stuffing suspected)"
-            if match >= 55
-            else "Weak match - likely reject (keyword stuffing suspected)"
-        )
-    elif match >= 75:
-        recommendation = "Strong match - shortlist"
-    elif match >= 70:
-        recommendation = "Possible match - shortlist"
-    elif match >= 55:
-        recommendation = "Possible match - review"
-    else:
-        recommendation = "Weak match - likely reject"
+    recommendation = recommendation_for_score(
+        match,
+        keyword_stuffing_suspected=keyword_stuffing_suspected,
+        shortlistable=shortlistable,
+    )
 
     return {
         "name": candidate.get("name"),
@@ -287,7 +514,9 @@ def candidate_scorer_skill(
         "match_percent": match,
         "matched_required": matched_req,
         "matched_required_in_experience": matched_req_experience,
+        "matched_required_groups": matched_groups,
         "missing_required": missing_req,
+        "missing_required_groups": missing_groups,
         "matched_nice_to_have": matched_nice,
         "experience_years": cand_years,
         "listed_skill_coverage_percent": round(100 * listed_cov, 1),
@@ -342,145 +571,43 @@ def email_drafter_skill(
     }
 
 
-def suggest_interview_slots(n: int, start_in_days: int = 3) -> List[str]:
-    """Suggest ``n`` business-hour interview slots starting a few days out."""
+def suggest_interview_slots(
+    n: int,
+    start_in_days: int = 3,
+    timezone: str | None = None,
+) -> List[str]:
+    """Suggest ``n`` business-hour interview slots in the configured timezone."""
+    if n <= 0:
+        return []
+
+    tz_name = timezone or config.INTERVIEW_TIMEZONE
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("UTC")
+
     slots: List[str] = []
-    day = datetime.now() + timedelta(days=start_in_days)
-    hours = [10, 14, 16]  # 10:00, 14:00, 16:00
-    i = 0
+    day = datetime.now(tz) + timedelta(days=start_in_days)
+    hours = [10, 14, 16]
     while len(slots) < n:
-        d = day + timedelta(days=i // len(hours))
-        if d.weekday() < 5:  # Mon-Fri only
-            hour = hours[i % len(hours)]
-            slots.append(d.replace(hour=hour, minute=0, second=0, microsecond=0)
-                         .strftime("%A, %d %b %Y at %H:%M IST"))
-        i += 1
+        if day.weekday() < 5:
+            for hour in hours:
+                if len(slots) >= n:
+                    break
+                slot = day.replace(hour=hour, minute=0, second=0, microsecond=0)
+                slots.append(slot.strftime("%A, %d %b %Y at %H:%M %Z"))
+        day += timedelta(days=1)
     return slots
 
 
 __all__ = [
     "SKILL_VOCAB",
+    "NICE_TO_HAVE_WEIGHT",
     "resume_parser_skill",
     "jd_parser_skill",
     "candidate_scorer_skill",
+    "recommendation_for_score",
     "email_drafter_skill",
     "suggest_interview_slots",
+    "estimate_experience_years",
 ]
-
-
-# --------------------------------------------------------------------------- #
-# LLM EXTRACTION FUNCTIONS (with regex fallback)
-# --------------------------------------------------------------------------- #
-def llm_skill_extractor(resume_text: str, required_skills: List[str]) -> Dict[str, Any]:
-    """Extract skills using LLM with regex fallback.
-    
-    Args:
-        resume_text: Resume text
-        required_skills: List of required skills to look for
-        
-    Returns:
-        Dict with skill presence and confidence
-    """
-    result = {}
-    try:
-        from google import genai
-        from google.genai import types
-        import os
-        
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("No API key")
-        
-        client = genai.Client(api_key=api_key)
-        prompt = f"""Extract which of these required skills are present in the resume.
-Required skills: {required_skills}
-Resume: {resume_text[:3000]}
-
-Return JSON: {{"skills": {{"skill_name": true/false, ...}}, "confidence": 0.0-1.0}}"""
-        
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
-        import json
-        data = json.loads(response.text)
-        return data
-    except Exception:
-        # Fallback to regex
-        for skill in required_skills:
-            result[skill] = skill.lower() in resume_text.lower()
-        return {"skills": result, "confidence": 0.5}
-
-
-def llm_experience_extractor(resume_text: str) -> Dict[str, Any]:
-    """Extract years of experience using LLM with regex fallback."""
-    try:
-        from google import genai
-        from google.genai import types
-        import os
-        
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("No API key")
-        
-        client = genai.Client(api_key=api_key)
-        prompt = f"""Extract total years of professional experience from this resume.
-Resume: {resume_text[:3000]}
- 
-Return JSON: {{"years": float, "confidence": 0.0-1.0, "evidence": "brief explanation"}}"""
-        
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
-        import json
-        return json.loads(response.text)
-    except Exception:
-        years = _estimate_years(resume_text)
-        return {"years": float(years), "confidence": 0.5, "evidence": "regex_estimate"}
-
-
-def llm_email_classifier(subject: str, body: str, has_attachment: bool = False) -> Dict[str, Any]:
-    """Classify email as application using LLM with regex fallback."""
-    try:
-        from google import genai
-        from google.genai import types
-        import os
-        
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("No API key")
-        
-        client = genai.Client(api_key=api_key)
-        prompt = f"""Classify this email as a job application.
-Subject: {subject}
-Body: {body[:2000]}
-Has attachment: {has_attachment}
- 
-Return JSON: {{"is_application": bool, "is_relevant": bool, "role_mentioned": "string or empty", "confidence": 0.0-1.0}}"""
-        
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
-        import json
-        return json.loads(response.text)
-    except Exception:
-        text = (subject + " " + body).lower()
-        is_app = any(k in text for k in ["resume", "cv", "application", "job", "position"])
-        return {"is_application": is_app, "is_relevant": is_app, "role_mentioned": "", "confidence": 0.4}
-
-
-__all__.extend(["llm_skill_extractor", "llm_experience_extractor", "llm_email_classifier"])

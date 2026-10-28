@@ -95,10 +95,23 @@ def adk_scheduler_stage(tool_context: ToolContext) -> Dict[str, Any]:
         raise RuntimeError("Screening results are missing; run the screening stage first")
 
     ctx = _context(tool_context)
-    emails = orchestrator.run_scheduler(ctx, ranked, requirements["title"])
+    if ctx.can("send_invitations"):
+        emails = orchestrator.run_scheduler(ctx, ranked, requirements["title"])
+    else:
+        emails = []
+        ctx.audit_log.append({
+            "user": ctx.user,
+            "role": ctx.role.value,
+            "capability": "send_invitations",
+            "granted": False,
+        })
     state["interview_emails"] = emails
     _record_audit(tool_context, ctx)
-    return {"status": "ok", "invitations": len(emails)}
+    return {
+        "status": "ok",
+        "invitations": len(emails),
+        "scheduling_skipped": not ctx.can("send_invitations"),
+    }
 
 
 def adk_insights_stage(tool_context: ToolContext) -> Dict[str, Any]:

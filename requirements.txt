@@ -14,12 +14,5 @@ requests==2.34.2
 # Web UI (app.py) - local demo and Hugging Face Spaces deployment
 gradio==6.26.0
 
-# Agentic system additions
-tenacity==9.1.4
-pydantic==2.13.4
-
 # Synthetic-fixture generation (tools/generate_synthetic_resumes.py)
 pillow==12.3.0
-
-# Optional: vector memory. If absent, src/memory.py uses a JSON fallback.
-# chromadb==0.5.0

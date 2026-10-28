@@ -95,15 +95,18 @@ remove sanitisation when adding new tools or agents.
 | `viewer` | no | no | no | no |
 
 Log records pass through `PiiMaskingFilter`; truncation uses `safe_preview()` so
-a partial email cannot leak. Audit decisions are stored in
-`SecurityContext.audit_log`.
+a partial email cannot leak. Masking covers emails, phone numbers, URLs,
+tracebacks, and local filesystem paths while preserving ordinary years and
+non-phone numbers. Audit decisions are stored in `SecurityContext.audit_log`.
+When a role lacks a permission, the affected stage is skipped and the denial is
+recorded instead of crashing the pipeline.
 
 ## Known limitations
 
 - The live Gemini agents are optional. Without `GOOGLE_API_KEY`, the
   deterministic orchestrator runs the same skills and is the CI-tested path.
-- Vector memory (`chromadb`) is optional; without it, `src/memory.py` uses a
-  local JSON fallback. Do not store real candidate data in that fallback.
+- Thresholds and interview timezone are environment-driven (`src/config.py`);
+  changing them does not change the deterministic scoring formula.
 - The UI's email features send real mail if configured with real credentials.
   Use test accounts and synthetic candidates when demonstrating the project.
 

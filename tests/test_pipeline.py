@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from src import config
 from src.orchestrator import run_pipeline
 from src.security import AccessDeniedError
 
@@ -16,7 +17,7 @@ def test_pipeline_runs_offline_and_produces_artifacts():
 
     shortlisted = [
         c for c in ranked
-        if c.get("shortlistable", True) and c["match_percent"] >= 70
+        if c.get("shortlistable", True) and c["match_percent"] >= config.SHORTLIST_THRESHOLD
     ]
     assert len(result["interview_emails"]) == len(shortlisted)
     assert len(shortlisted) > 0
@@ -24,7 +25,7 @@ def test_pipeline_runs_offline_and_produces_artifacts():
     by_name = {c["name"]: c for c in ranked}
     stuffer = by_name["Priya Menon"]
     assert stuffer["keyword_stuffing_suspected"] is True
-    assert stuffer["match_percent"] < 70
+    assert stuffer["match_percent"] < config.SHORTLIST_THRESHOLD
     assert all(e["candidate"] != "Priya Menon" for e in result["interview_emails"])
 
     unreadable = by_name["Unknown Candidate"]

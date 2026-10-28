@@ -1,6 +1,6 @@
 import pytest
 
-from src import adk_stages, agents
+from src import adk_stages, agents, config
 from src.orchestrator import (
     AgenticUnavailable,
     run_adk_pipeline,
@@ -18,13 +18,17 @@ def test_stage_tools_produce_the_same_deterministic_results():
     ctx = FakeToolContext()
     assert adk_stages.adk_jd_stage(ctx)["status"] == "ok"
     assert adk_stages.adk_screening_stage(ctx)["screened"] == 18
-    assert adk_stages.adk_scheduler_stage(ctx)["invitations"] == 4
+    ranked = ctx.state["ranked_candidates"]
+    expected_shortlist = sum(
+        1 for c in ranked
+        if c.get("shortlistable", True) and c["match_percent"] >= config.SHORTLIST_THRESHOLD
+    )
+    assert adk_stages.adk_scheduler_stage(ctx)["invitations"] == expected_shortlist
     assert adk_stages.adk_insights_stage(ctx)["total_applicants"] == 18
 
-    ranked = ctx.state["ranked_candidates"]
     assert ctx.state["jd_requirements"]["title"]
     assert [c["rank"] for c in ranked] == list(range(1, 19))
-    assert len(ctx.state["interview_emails"]) == 4
+    assert len(ctx.state["interview_emails"]) == expected_shortlist
     assert ctx.state["insights"]["unreadable_resumes"] == 1
     assert any(entry["capability"] == "send_invitations" for entry in ctx.state["audit_log"])
 

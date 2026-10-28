@@ -34,6 +34,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import pypdf
+from src import config
 from src import skills as skills_mod
 
 import matplotlib
@@ -246,7 +247,9 @@ def stat_card(number, label):
 REC_CHIP = {
     "Strong match - shortlist": ("shortlist", "Shortlist"),
     "Possible match - review": ("review", "Review"),
+    "Possible match - review (keyword stuffing suspected)": ("review", "Review"),
     "Weak match - likely reject": ("reject", "Reject"),
+    "Unreadable resume - manual review": ("review", "Manual review"),
 }
 
 
@@ -353,13 +356,14 @@ def make_score_chart(ranked):
     n = max(len(ranked), 1)
     names = _disambiguated_labels([c["name"] for c in ranked])
     scores = [c["match_percent"] for c in ranked]
-    colors = ["#a855f7" if s >= 70 else "#3f3f52" for s in scores]
+    threshold = config.SHORTLIST_THRESHOLD
+    colors = ["#a855f7" if s >= threshold else "#3f3f52" for s in scores]
 
     fig, ax = plt.subplots(figsize=(7.6, max(3.6, n * 0.34)), facecolor="#12121c")
     ax.set_facecolor("#12121c")
     bars = ax.barh(names[::-1], scores[::-1], color=colors[::-1], height=0.58)
-    ax.axvline(70, color="#f472b6", linestyle="--", linewidth=1, alpha=0.7)
-    ax.text(71, n - 0.5, "70% shortlist line", color="#f472b6", fontsize=8)
+    ax.axvline(threshold, color="#f472b6", linestyle="--", linewidth=1, alpha=0.7)
+    ax.text(threshold + 1, n - 0.5, f"{threshold:.0f}% shortlist line", color="#f472b6", fontsize=8)
     ax.set_xlim(0, 108)
     ax.set_xlabel("Match %", color="#c9c9dd", fontsize=9)
     ax.tick_params(colors="#c9c9dd", labelsize=8.5)
@@ -799,61 +803,8 @@ def _skill_present(skill, text_norm):
     return re.search(pattern, text_norm) is not None
 
 
-_EDU_HEADINGS = {"education", "academic background", "academics", "academic qualifications",
-                 "educational background", "qualifications"}
-_OTHER_HEADINGS = {"experience", "work experience", "professional experience", "employment",
-                   "employment history", "work history", "projects", "skills", "technical skills",
-                   "certifications", "summary", "profile", "objective", "achievements",
-                   "internships", "internship", "references", "languages", "interests", "awards",
-                   "publications", "courses", "training", "volunteering", "professional summary"}
-_EDU_LINE = re.compile(r"\b(university|college|bachelors?|bsc|b\.sc|msc|m\.sc|mba|ph\.?d|matric|"
-                       r"intermediate|fsc|cgpa|gpa)\b", re.I)
-_RANGE = re.compile(
-    r"((?:19|20)\d{2})\s*(?:-|–|—|to|until)\s*(?:[A-Za-z]{3,9}\.?,?\s*)?"
-    r"((?:19|20)\d{2}|present|current|now|date)", re.I)
-_EXPLICIT_YEARS = re.compile(r"(\d{1,2}(?:\.\d)?)\s*\+?\s*(?:years?|yrs?)\b", re.I)
-
-
-# FALLBACK ONLY
 def _estimate_experience_years(text):
-    """Total professional experience in years.
-    Takes the larger of (a) an explicit claim such as '5 years of experience' and
-    (b) the merged length of dated job ranges such as 'Jan 2020 - Present',
-    ignoring date ranges that belong to the education section."""
-    from datetime import datetime
-    explicit = [float(x) for x in _EXPLICIT_YEARS.findall(text) if float(x) <= 45]
-
-    this_year = datetime.now().year
-    in_edu, spans = False, []
-    for line in text.splitlines():
-        head = re.sub(r"[^a-z ]", "", line.lower()).strip()
-        if 0 < len(head.split()) <= 4:
-            if head in _EDU_HEADINGS:
-                in_edu = True
-            elif head in _OTHER_HEADINGS:
-                in_edu = False
-        if in_edu or _EDU_LINE.search(line):
-            continue
-        for a, b in _RANGE.findall(line):
-            start = int(a)
-            end = this_year if not b.isdigit() else int(b)
-            if start <= end <= this_year + 1 and end - start <= 40:
-                spans.append((start, end))
-
-    spans.sort()
-    total, cur = 0.0, None
-    for start, end in spans:
-        if cur is None:
-            cur = [start, end]
-        elif start <= cur[1]:
-            cur[1] = max(cur[1], end)
-        else:
-            total += max(cur[1] - cur[0], 0.5)
-            cur = [start, end]
-    if cur is not None:
-        total += max(cur[1] - cur[0], 0.5)
-
-    return round(max(max(explicit, default=0.0), total), 1)
+    return skills_mod.estimate_experience_years(text)
 
 
 def build_custom_requirements(position, skills_text, nice_text, min_years):
@@ -866,6 +817,7 @@ def build_custom_requirements(position, skills_text, nice_text, min_years):
     return {
         "title": (position or "").strip() or "the role",
         "required_skills": required,
+        "required_skill_groups": [],
         "nice_to_have": nice,
         "min_years": min_years,
         "seniority": "senior" if min_years >= 5 else ("mid" if min_years >= 2 else "junior"),
@@ -889,21 +841,7 @@ DEFAULT_INVITE_TEMPLATE = (
     "Best regards,\n**{Sender Name}**\n{Company Name}\n{Official Email Address}"
 )
 
-CUSTOM_INVITE_SAMPLE = (
-    "Dear {Candidate Name},\n\n"
-    "We are pleased to inform you that you have been shortlisted for an interview for the "
-    "position of **{Job Title}** at **{Company Name}**.\n\n"
-    "Please find the interview details below:\n\n"
-    "**Date:** [Date]\n"
-    "**Time:** [Time]\n"
-    "**Location:** [Location], {Company Name}\n"
-    "**Interview Mode:** [Mode]\n\n"
-    "Kindly confirm your availability by replying to this email. Please arrive a few minutes "
-    "early. We also recommend bringing an updated copy of your CV.\n\n"
-    "We look forward to meeting you and discussing your qualifications, skills, and potential "
-    "contribution to our team.\n\n"
-    "Best regards,\n**{Sender Name}**\n{Company Name}\n{Official Email Address}"
-)
+CUSTOM_INVITE_SAMPLE = DEFAULT_INVITE_TEMPLATE
 _SAMPLE_BLANKS = ("[Date]", "[Time]", "[Location]", "[Mode]")
 
 # {Placeholders} are matched case-insensitively; spaces / "_" / "-" are interchangeable.
@@ -1015,7 +953,7 @@ def _draft_invitation(candidate, position, company, recruiter, slot, body_templa
     strengths = candidate.get("matched_required") or candidate.get("skills") or []
     company = (company or "").strip() or "our company"
     recruiter = (recruiter or "").strip() or "HR Team"
-    slot = re.sub(r"\s+IST$", "", slot or "").strip()
+    slot = re.sub(r"\s+[A-Z][A-Z0-9:+-]*$", "", slot or "").strip()
 
     template = (body_template or "").replace("\r\n", "\n").strip() or DEFAULT_INVITE_TEMPLATE
     filled = _fill_invite_template(template, {
@@ -1082,12 +1020,7 @@ def download_trace_json(trace_state):
 
 
 def _recommendation_for(match):
-    # Same thresholds as skills.candidate_scorer_skill
-    if match >= 75:
-        return "Strong match - shortlist"
-    if match >= 55:
-        return "Possible match - review"
-    return "Weak match - likely reject"
+    return skills_mod.recommendation_for_score(match)
 
 
 def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text, min_years, limit=60):
@@ -1158,7 +1091,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
             result = skills_mod.candidate_scorer_skill(profile, requirements)
             if not requirements["nice_to_have"]:
                 # No nice-to-have list -> drop that 15% component and re-normalise to 100.
-                result["match_percent"] = min(100.0, round(result["match_percent"] / 0.85, 1))
+                result["match_percent"] = min(100.0, round(result["match_percent"] / (1 - skills_mod.NICE_TO_HAVE_WEIGHT), 1))
                 result["recommendation"] = _recommendation_for(result["match_percent"])
             result["email"] = profile["email"]
             result["skills"] = profile["skills"]
@@ -1205,7 +1138,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     status = (f'<div class="status-line ok">✅ Found {len(candidates)} relevant application(s), scored for '
               f'“{_html.escape(requirements["title"])}” · required: {_html.escape(req_txt)} · '
               f'min. experience: {requirements["min_years"]} yr(s){excluded_note}</div>'
-              f'<div class="status-line info">Shortlist ≥ 75% · Review 55–74% · Reject &lt; 55%</div>')
+              f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}–{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>')
     state = {"title": requirements["title"], "candidates": candidates}
     return (_stats_html_for(candidates), status, render_candidate_table(candidates),
             make_score_chart(candidates), make_skills_chart(coverage),
