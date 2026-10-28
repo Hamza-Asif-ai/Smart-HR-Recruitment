@@ -8,8 +8,10 @@ and a folder of resumes; get back a ranked shortlist, personalized interview
 invitations, and a hiring-insights report.
 
 The pipeline runs **offline and deterministically** without an API key. With a
-Gemini key, the same four agents can be driven by ADK `LlmAgent`s through a
-`SequentialAgent`.
+Gemini key, `run_pipeline(use_agents=True)` / `python -m src.orchestrator --agents`
+lets four ADK `LlmAgent`s orchestrate the same deterministic stage tools through
+a `SequentialAgent`; if the model path is unavailable or fails validation, the
+deterministic runner is used automatically.
 
 ---
 
@@ -27,24 +29,28 @@ Gemini key, the same four agents can be driven by ADK `LlmAgent`s through a
 ## Concepts demonstrated
 
 1. **Multi-agent systems with ADK** — the four agents are composed into an ADK
-   `SequentialAgent`. Each writes to an `output_key`, so its result becomes the
-   next agent's input through shared session state:
-   `jd_requirements → ranked_candidates → interview_emails → insights_report`.
+   `SequentialAgent`. In the optional agentic path each agent calls exactly one
+   deterministic stage tool, and full results are passed through shared session
+   state (`jd_requirements → ranked_candidates → interview_emails → insights`).
+   The model only sees small, PII-free summaries; ranking and drafting remain in
+   Python.
 
 2. **MCP Server integration** — `src/mcp_filesystem_server.py` exposes
    *sandboxed* file tools (`list_resumes`, `read_resume`,
    `read_job_description`, `save_report`) with path-traversal protection.
    Agents reach the filesystem only through this boundary.
 
-3. **Agent Skills** — reusable, testable tools wrapped as ADK `FunctionTool`s:
-   `resume_parser_skill`, `candidate_scorer_skill`, `email_drafter_skill`
-   (plus `jd_parser_skill` and `suggest_interview_slots`).
+3. **Agent Skills** — reusable, testable tools. `resume_parser_skill`,
+   `candidate_scorer_skill`, and `email_drafter_skill` (plus `jd_parser_skill`
+   and `suggest_interview_slots`) do the work; `adk_stages.py` exposes the four
+   pipeline stages as ADK `FunctionTool`s.
 
 4. **Security / PII masking + RBAC** — `src/security.py` masks emails, phones,
    and URLs before logging, and enforces role-based access control so only
    `recruiter`/`admin` roles can view unmasked PII or send invitations. Every
-   gated action is written to an audit log. Resume text is sanitised before it
-   reaches an LLM to reduce prompt-injection risk.
+   gated action is written to an audit log. Resume text is sanitised before
+   parsing, and the optional LLM path receives counts rather than resume text,
+   so prompt injection cannot reach a model.
 
 ---
 
@@ -61,10 +67,13 @@ Gemini key, the same four agents can be driven by ADK `LlmAgent`s through a
                           insights_report ◀─ [Insights] ◀─ [Scheduler]
                                                          interview_emails
 
+  Default: deterministic orchestrator (no API key)
+  Optional: the same four stages as ADK LlmAgents + FunctionTools
+
   Cross-cutting:  ├─ MCP Filesystem Server  (read resumes / save reports)
                   └─ Security layer          (PII masking in logs + RBAC)
 
-  Agent Skills (FunctionTools): resume_parser · candidate_scorer · email_drafter
+  Stage tools: adk_jd_stage · adk_screening_stage · adk_scheduler_stage · adk_insights_stage
 ```
 
 ---
@@ -87,7 +96,8 @@ smart-hr-recruitment/
 │   ├── sanitize.py                     ← prompt-injection defense
 │   ├── mcp_filesystem_server.py        ← sandboxed MCP file tools
 │   ├── agents.py                       ← the 4 ADK LlmAgents + SequentialAgent
-│   ├── orchestrator.py                 ← deterministic end-to-end runner
+│   ├── adk_stages.py                   ← ADK stage tools (deterministic core)
+│   ├── orchestrator.py                 ← deterministic runner + optional ADK path
 │   ├── memory.py                       ← optional vector memory (JSON fallback)
 │   ├── tracing.py                      ← trace recorder
 │   └── budget.py                       ← LLM/time budget guard
@@ -116,13 +126,16 @@ source venv/bin/activate
 pip install -r requirements-dev.txt
 
 HR_DATA_ROOT=./data python -m src.orchestrator
+# With Gemini, try the ADK-orchestrated path (falls back automatically):
+HR_DATA_ROOT=./data python -m src.orchestrator --agents
 ```
 
 Or from Python:
 
 ```python
 from src.orchestrator import run_pipeline
-result = run_pipeline(role="recruiter")
+result = run_pipeline(role="recruiter")                 # deterministic
+# result = run_pipeline(role="recruiter", use_agents=True)  # ADK + fallback
 ```
 
 ### Notebook
@@ -150,7 +163,8 @@ Optional environment variables:
 
 - `BROWSER_STATE_SECRET` — enables Gradio `BrowserState`; without it the app
   falls back to in-memory `gr.State`.
-- `GOOGLE_API_KEY` — enables live Gemini agents.
+- `GOOGLE_API_KEY` — enables the optional ADK pipeline (`--agents` /
+  `use_agents=True`); the Gradio inbox tool stays deterministic.
 - `HR_DATA_ROOT` — points at a different data directory.
 
 Email credentials are entered in the UI at runtime and are not written to disk.
@@ -231,11 +245,20 @@ See **[SECURITY.md](SECURITY.md)** for the full policy. Highlights:
 
 ## Agentic architecture
 
-The default pipeline is the four-agent `SequentialAgent` above. `src/agents.py`
-also contains builder functions for a planner, reflection, email-writer,
-reply-classifier, and supervisor agent. These are **experimental scaffolding**
-and are not wired into the default pipeline yet; `src/orchestrator.py` includes
-a planner entry point that currently falls back to the deterministic pipeline.
+There are two paths:
+
+- **Default (no API key):** `src/orchestrator.py` runs the four stages directly.
+  It is deterministic, testable, and used by the Gradio inbox tool.
+- **Optional ADK path:** `run_pipeline(use_agents=True)` or
+  `python -m src.orchestrator --agents` runs the four `LlmAgent`s in a
+  `SequentialAgent`. Each calls one `adk_stages.py` tool, which delegates to the
+  deterministic functions and stores full results in ADK session state. The
+  result is validated (all resumes screened, valid ranks, numeric scores) before
+  it is accepted; otherwise the deterministic path is used.
+
+`src/agents.py` also contains builder functions for a planner, reflection,
+email-writer, reply-classifier, and supervisor agent. These are **experimental
+scaffolding** and are not wired into either pipeline.
 
 Supporting infrastructure exists for:
 

@@ -133,7 +133,16 @@ python -m src.mcp_filesystem_server --root ./data
 ## 6. (Optional) Gemini API key — only for LIVE LLM agents
 
 Without a key the project automatically uses the **deterministic skill runner**, so the
-full pipeline still runs and produces real output. To run the live Gemini `LlmAgent`s:
+full pipeline still runs and produces real output. To try the optional ADK
+`SequentialAgent` path (four `LlmAgent`s + deterministic stage tools):
+
+```powershell
+python -m src.orchestrator --agents
+```
+
+If the model call fails or returns invalid results, the pipeline falls back to
+the deterministic runner automatically. The agent path never sends resume text
+to the model; it receives counts and status summaries only.
 
 1. Get a free key from <https://aistudio.google.com>.
 2. Set it as an environment variable:
@@ -232,9 +241,10 @@ The notebook and Gradio UI additionally produce `ranked_candidates.json`,
 
 ## Environment Variables (Agentic Features)
 
-- `GOOGLE_API_KEY` - Google Gemini API key for live LLM agents. Without it, the
-  deterministic offline pipeline is used.
-- `GEMINI_API_KEY` - Legacy alias accepted by the UI and skills layer.
+- `GOOGLE_API_KEY` - Google Gemini API key for the optional ADK pipeline
+  (`--agents` / `use_agents=True`). Without it, the deterministic offline
+  pipeline is used.
+- `GEMINI_API_KEY` - Legacy alias accepted by the orchestrator.
 - `BROWSER_STATE_SECRET` - Enables Gradio `BrowserState`; without it the UI uses
   session-only `gr.State`.
 - `HR_DATA_ROOT` - Data directory (default: `./data`).
