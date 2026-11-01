@@ -26,6 +26,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Lint with ruff
+        run: ruff check .
+
       - name: Scan for real PII and committed secrets
         run: python tools/check_no_pii.py --all
 

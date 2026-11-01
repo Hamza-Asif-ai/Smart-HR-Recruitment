@@ -1,0 +1,334 @@
+{
+  "description": "Labelled synthetic interview replies, including English, Roman Urdu, and Urdu script.",
+  "messages": [
+    {
+      "id": "en_confirm_1",
+      "language": "en",
+      "text": "Yes, I confirm I can attend the interview.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "en_confirm_2",
+      "language": "en",
+      "text": "I am available on Monday at 10:00.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "en_confirm_3",
+      "language": "en",
+      "text": "That time works for me. See you then.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "en_confirm_4",
+      "language": "en",
+      "text": "Confirming my interview for tomorrow.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "en_confirm_5",
+      "language": "en",
+      "text": "I accepted the interview invitation, thank you.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_1",
+      "language": "en",
+      "text": "I accepted another offer and cannot join",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_exact",
+      "language": "en",
+      "text": "I am not available",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_2",
+      "language": "en",
+      "text": "I am not available for the interview.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_3",
+      "language": "en",
+      "text": "Sorry, I cannot attend.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_4",
+      "language": "en",
+      "text": "I have accepted a different offer, so I withdraw.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_5",
+      "language": "en",
+      "text": "No thanks, I am not interested.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_6",
+      "language": "en",
+      "text": "I am no longer available for this role.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_decline_7",
+      "language": "en",
+      "text": "I am not available, but thank you for the opportunity.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "en_reschedule_1",
+      "language": "en",
+      "text": "Can we change the time?",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "en_reschedule_2",
+      "language": "en",
+      "text": "Could we reschedule to another day?",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "en_reschedule_3",
+      "language": "en",
+      "text": "Please move the interview to next week.",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "en_reschedule_4",
+      "language": "en",
+      "text": "I need a different time slot, can we postpone?",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "en_reschedule_5",
+      "language": "en",
+      "text": "I am available but can we change the time?",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "en_question_1",
+      "language": "en",
+      "text": "What is the interview format?",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "en_question_2",
+      "language": "en",
+      "text": "Could you clarify the location?",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "en_question_3",
+      "language": "en",
+      "text": "How long will the interview take?",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "en_question_4",
+      "language": "en",
+      "text": "Where is the office?",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "ru_confirm_1",
+      "language": "roman_ur",
+      "text": "Haan, main confirm karta hoon.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "ru_confirm_2",
+      "language": "roman_ur",
+      "text": "Ji haan, main interview ke liye available hoon.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "ru_confirm_3",
+      "language": "roman_ur",
+      "text": "Main aa sakta hoon, theek hai.",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "ru_reschedule_1",
+      "language": "roman_ur",
+      "text": "Mujhe interview ke liye waqt change karna hai.",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "ru_reschedule_2",
+      "language": "roman_ur",
+      "text": "Kya hum interview ka waqt badal sakte hain?",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "ru_reschedule_3",
+      "language": "roman_ur",
+      "text": "Mujhe doosra din chahiye, agla hafta behtar hai.",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "ru_decline_1",
+      "language": "roman_ur",
+      "text": "Main nahi aa sakta.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ru_decline_2",
+      "language": "roman_ur",
+      "text": "Mujhe ye job nahi chahiye.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ru_decline_3",
+      "language": "roman_ur",
+      "text": "Main interview attend nahi kar sakta.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ru_decline_4",
+      "language": "roman_ur",
+      "text": "Mujhe dusri job accept kar li hai.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ru_decline_5",
+      "language": "roman_ur",
+      "text": "Main available nahi hoon.",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ru_question_1",
+      "language": "roman_ur",
+      "text": "Kya aap interview ki details bata sakte hain?",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "ru_question_2",
+      "language": "roman_ur",
+      "text": "Interview kab aur kahan hoga?",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "ru_question_3",
+      "language": "roman_ur",
+      "text": "Mujhe maloom karna hai ke interview kaise hoga.",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "ur_confirm_1",
+      "language": "ur",
+      "text": "ہاں، میں تصدیق کرتا ہوں۔",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "ur_confirm_2",
+      "language": "ur",
+      "text": "جی ہاں، میں انٹرویو کے لیے دستیاب ہوں۔",
+      "intent": "confirm",
+      "requires_human": false
+    },
+    {
+      "id": "ur_reschedule_1",
+      "language": "ur",
+      "text": "مجھے انٹرویو کا وقت تبدیل کرنا ہے۔",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "ur_reschedule_2",
+      "language": "ur",
+      "text": "کیا ہم وقت تبدیل کر سکتے ہیں؟",
+      "intent": "reschedule",
+      "requires_human": false
+    },
+    {
+      "id": "ur_decline_1",
+      "language": "ur",
+      "text": "میں نہیں آ سکتا۔",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ur_decline_2",
+      "language": "ur",
+      "text": "میں نے دوسری نوکری قبول کر لی ہے۔",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ur_decline_3",
+      "language": "ur",
+      "text": "مجھے اس نوکری میں دلچسپی نہیں ہے۔",
+      "intent": "decline",
+      "requires_human": false
+    },
+    {
+      "id": "ur_question_1",
+      "language": "ur",
+      "text": "کیا آپ انٹرویو کی تفصیلات بتا سکتے ہیں؟",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "ur_question_2",
+      "language": "ur",
+      "text": "انٹرویو کب اور کہاں ہوگا؟",
+      "intent": "question",
+      "requires_human": false
+    },
+    {
+      "id": "unclear_1",
+      "language": "en",
+      "text": "Hmm, maybe.",
+      "intent": "question",
+      "requires_human": true
+    },
+    {
+      "id": "unclear_2",
+      "language": "en",
+      "text": "Let me think about it.",
+      "intent": "question",
+      "requires_human": true
+    }
+  ]
+}

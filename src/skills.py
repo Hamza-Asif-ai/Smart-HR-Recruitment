@@ -527,6 +527,10 @@ def candidate_scorer_skill(
         "parse_warnings": candidate.get("parse_warnings", []),
         "shortlistable": shortlistable,
         "recommendation": recommendation,
+        "needs_human_review": keyword_stuffing_suspected or not shortlistable,
+        "confidence": 0.0 if not shortlistable else round(
+            0.55 + 0.45 * evidence_cov, 3) if total_required_units else 0.8,
+        "memory_hint": None,
     }
 
 
@@ -571,12 +575,13 @@ def email_drafter_skill(
     }
 
 
-def suggest_interview_slots(
+def suggest_interview_slot_datetimes(
     n: int,
     start_in_days: int = 3,
     timezone: str | None = None,
-) -> List[str]:
-    """Suggest ``n`` business-hour interview slots in the configured timezone."""
+    hours: List[int] | None = None,
+) -> List[datetime]:
+    """Suggest ``n`` business-hour interview slots as timezone-aware datetimes."""
     if n <= 0:
         return []
 
@@ -586,18 +591,35 @@ def suggest_interview_slots(
     except ZoneInfoNotFoundError:
         tz = ZoneInfo("UTC")
 
-    slots: List[str] = []
-    day = datetime.now(tz) + timedelta(days=start_in_days)
-    hours = [10, 14, 16]
+    slots: List[datetime] = []
+    day = datetime.now(tz) + timedelta(days=max(0, start_in_days))
+    for_hours = hours or [10, 14, 16]
     while len(slots) < n:
         if day.weekday() < 5:
-            for hour in hours:
+            for hour in for_hours:
                 if len(slots) >= n:
                     break
                 slot = day.replace(hour=hour, minute=0, second=0, microsecond=0)
-                slots.append(slot.strftime("%A, %d %b %Y at %H:%M %Z"))
+                slots.append(slot)
         day += timedelta(days=1)
     return slots
+
+
+def format_interview_slot(slot: datetime) -> str:
+    """Format an interview datetime for the invitation email."""
+    return slot.strftime("%A, %d %b %Y at %H:%M %Z")
+
+
+def suggest_interview_slots(
+    n: int,
+    start_in_days: int = 3,
+    timezone: str | None = None,
+) -> List[str]:
+    """Suggest ``n`` business-hour interview slots in the configured timezone."""
+    return [
+        format_interview_slot(slot)
+        for slot in suggest_interview_slot_datetimes(n, start_in_days, timezone)
+    ]
 
 
 __all__ = [
@@ -608,6 +630,8 @@ __all__ = [
     "candidate_scorer_skill",
     "recommendation_for_score",
     "email_drafter_skill",
+    "suggest_interview_slot_datetimes",
     "suggest_interview_slots",
+    "format_interview_slot",
     "estimate_experience_years",
 ]

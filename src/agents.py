@@ -20,8 +20,7 @@ deterministic orchestrator in ``orchestrator.py`` runs the same skills directly.
 
 from __future__ import annotations
 
-# Default Gemini model used by every agent. Flash is fast + cheap for Kaggle.
-DEFAULT_MODEL = "gemini-flash-latest"
+# Model ids are environment-driven only; there is no hardcoded Gemini name.
 
 try:
     from google.adk.agents import LlmAgent, SequentialAgent
@@ -33,6 +32,8 @@ except Exception:  # pragma: no cover - ADK not installed in this env
 
 from . import adk_stages
 from . import config
+
+DEFAULT_MODEL = config.get_gemini_model()
 
 
 # --------------------------------------------------------------------------- #
@@ -73,10 +74,14 @@ writes the markdown report. Reply with the tool's summary (counts only).
 """
 
 
+def _model(model: str = "") -> str:
+    return (model or config.get_gemini_model() or "unconfigured").strip()
+
+
 def build_jd_agent(model: str = DEFAULT_MODEL) -> "LlmAgent":
     return LlmAgent(
         name="jd_agent",
-        model=model,
+        model=_model(model),
         description="Analyzes a job description into structured role requirements.",
         instruction=JD_AGENT_INSTRUCTION,
         tools=[FunctionTool(adk_stages.adk_jd_stage)],
@@ -87,7 +92,7 @@ def build_jd_agent(model: str = DEFAULT_MODEL) -> "LlmAgent":
 def build_resume_screener_agent(model: str = DEFAULT_MODEL) -> "LlmAgent":
     return LlmAgent(
         name="resume_screener_agent",
-        model=model,
+        model=_model(model),
         description="Parses and scores resumes against the role requirements.",
         instruction=RESUME_AGENT_INSTRUCTION,
         tools=[FunctionTool(adk_stages.adk_screening_stage)],
@@ -98,7 +103,7 @@ def build_resume_screener_agent(model: str = DEFAULT_MODEL) -> "LlmAgent":
 def build_scheduler_agent(model: str = DEFAULT_MODEL) -> "LlmAgent":
     return LlmAgent(
         name="interview_scheduler_agent",
-        model=model,
+        model=_model(model),
         description="Drafts personalized interview invitations and proposes slots.",
         instruction=SCHEDULER_AGENT_INSTRUCTION,
         tools=[FunctionTool(adk_stages.adk_scheduler_stage)],
@@ -109,7 +114,7 @@ def build_scheduler_agent(model: str = DEFAULT_MODEL) -> "LlmAgent":
 def build_insights_agent(model: str = DEFAULT_MODEL) -> "LlmAgent":
     return LlmAgent(
         name="insights_agent",
-        model=model,
+        model=_model(model),
         description="Aggregates the recruitment funnel into hiring metrics and a report.",
         instruction=INSIGHTS_AGENT_INSTRUCTION,
         tools=[FunctionTool(adk_stages.adk_insights_stage)],

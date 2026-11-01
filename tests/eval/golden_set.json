@@ -1,0 +1,141 @@
+{
+  "description": "Synthetic golden set with expected deterministic score bands. No real candidate data.",
+  "jd": "Job Title: Senior Backend Engineer\nRequired Skills:\n- Python\n- SQL\n- AWS\n- Docker\nExperience: 5 years\nPreferred:\n- Kubernetes",
+  "cases": [
+    {
+      "id": "strong_backend",
+      "group": "synthetic_alpha",
+      "resume": "Amara Okafor\namara@example.com\n6 years of experience building Python and SQL services deployed on AWS with Docker.\n\nExperience\nSenior Backend Engineer at Northwind, 2019 - 2025\nBuilt Python REST APIs, tuned SQL databases, and deployed Docker containers on AWS. Used Kubernetes in production.\n\nEducation\nB.Sc. Computer Science, State University",
+      "expected_band": [
+        90,
+        100
+      ],
+      "expected_skills": [
+        "python",
+        "sql",
+        "aws",
+        "docker",
+        "kubernetes"
+      ]
+    },
+    {
+      "id": "mid_backend",
+      "group": "synthetic_alpha",
+      "resume": "Ben Carter\nben@example.com\n3 years of experience building Python services with SQL databases.\n\nExperience\nBackend Engineer at Bluebird, 2022 - 2025\nBuilt Python APIs and wrote SQL queries.\n\nEducation\nB.Sc. Computer Science, City College",
+      "expected_band": [
+        35,
+        60
+      ],
+      "expected_skills": [
+        "python",
+        "sql"
+      ]
+    },
+    {
+      "id": "junior_python",
+      "group": "synthetic_beta",
+      "resume": "Chen Li\nchen@example.com\n1 year of experience with Python scripting and SQL reports.\n\nExperience\nJunior Developer at Small Studio, 2024 - 2025\nWrote Python scripts and SQL reports.\n\nEducation\nB.Sc. Information Systems, Metro College",
+      "expected_band": [
+        25,
+        70
+      ],
+      "expected_skills": [
+        "python",
+        "sql"
+      ]
+    },
+    {
+      "id": "unrelated_nurse",
+      "group": "synthetic_beta",
+      "resume": "Dana Reed\ndana@example.com\nRegistered nurse with 8 years of patient care experience.\n\nExperience\nStaff Nurse at General Hospital, 2017 - 2025\nManaged patient records and clinical care.\n\nEducation\nB.Sc. Nursing, General University",
+      "expected_band": [
+        0,
+        45
+      ],
+      "expected_skills": []
+    },
+    {
+      "id": "keyword_stuffer",
+      "group": "synthetic_gamma",
+      "resume": "Eli Morgan\neli@example.com\nSkills\nPython, SQL, AWS, Docker, Kubernetes, Terraform, CI/CD, Kafka, gRPC, React, Go, Java\n\nExperience\nSocial Media Coordinator, 2020 - 2025\nManaged campaigns and community channels.\n\nEducation\nB.A. Communications, Liberal Arts College",
+      "expected_band": [
+        45,
+        70
+      ],
+      "expected_skills": [
+        "python",
+        "sql",
+        "aws",
+        "docker",
+        "kubernetes"
+      ]
+    },
+    {
+      "id": "empty_unreadable",
+      "group": "synthetic_gamma",
+      "resume": "N/A",
+      "expected_band": [
+        0,
+        0
+      ],
+      "expected_skills": []
+    },
+    {
+      "id": "career_returner",
+      "group": "synthetic_delta",
+      "resume": "Farah Khan\nfarah@example.com\n8 years of experience across backend platform work.\n\nExperience\nPlatform Engineer at Summit, 2013 - 2019\nBuilt Python services, SQL data pipelines, AWS infrastructure, and Docker images.\n\nCareer break 2019 - 2023\n\nExperience\nContract Backend Engineer, 2023 - 2025\nDelivered Python APIs on AWS with Docker.\n\nEducation\nDiploma in Computer Science, Technical Institute",
+      "expected_band": [
+        70,
+        95
+      ],
+      "expected_skills": [
+        "python",
+        "sql",
+        "aws",
+        "docker"
+      ]
+    },
+    {
+      "id": "non_english_name_strong",
+      "group": "synthetic_delta",
+      "resume": "José Álvarez\njose@example.com\n6 years of experience building Python and SQL services deployed on AWS with Docker.\n\nExperience\nSenior Backend Engineer at Northwind, 2019 - 2025\nBuilt Python REST APIs, tuned SQL databases, and deployed Docker containers on AWS. Used Kubernetes in production.\n\nEducation\nB.Sc. Computer Science, State University",
+      "expected_band": [
+        90,
+        100
+      ],
+      "expected_skills": [
+        "python",
+        "sql",
+        "aws",
+        "docker",
+        "kubernetes"
+      ]
+    },
+    {
+      "id": "partial_cloud",
+      "group": "synthetic_epsilon",
+      "resume": "Grace Park\ngrace@example.com\n5 years of experience with Python, SQL, and AWS.\n\nExperience\nData Platform Engineer at Horizon, 2020 - 2025\nBuilt Python data jobs and SQL models on AWS.\n\nEducation\nB.Sc. Software Engineering, Technical University",
+      "expected_band": [
+        55,
+        90
+      ],
+      "expected_skills": [
+        "python",
+        "sql",
+        "aws"
+      ]
+    },
+    {
+      "id": "frontend_mismatch",
+      "group": "synthetic_epsilon",
+      "resume": "Hugo Silva\nhugo@example.com\n4 years of frontend development with JavaScript and React.\n\nExperience\nFrontend Developer at Pixel, 2021 - 2025\nBuilt JavaScript interfaces and React components.\n\nEducation\nB.Sc. Design, Arts College",
+      "expected_band": [
+        0,
+        60
+      ],
+      "expected_skills": [
+        "javascript"
+      ]
+    }
+  ]
+}

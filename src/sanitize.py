@@ -7,7 +7,6 @@ Prompt injection defense for untrusted content (resumes, emails).
 from __future__ import annotations
 
 import re
-from typing import Any
 
 
 _INJECTION_PATTERNS = [

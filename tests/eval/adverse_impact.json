@@ -1,0 +1,17 @@
+{
+  "description": "Synthetic group selection counts for a four-fifths adverse-impact report. No real candidates.",
+  "four_fifths": 0.8,
+  "groups": {
+    "synthetic_alpha": {"selected": 18, "total": 20},
+    "synthetic_beta": {"selected": 10, "total": 20},
+    "synthetic_gamma": {"selected": 14, "total": 20},
+    "synthetic_delta": {"selected": 20, "total": 20},
+    "synthetic_epsilon": {"selected": 16, "total": 20}
+  },
+  "expected": {
+    "reference_group": "synthetic_delta",
+    "reference_rate": 1.0,
+    "impacted_groups": ["synthetic_beta", "synthetic_gamma"],
+    "passes_4_5": false
+  }
+}

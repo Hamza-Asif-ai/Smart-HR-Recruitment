@@ -1,0 +1,7 @@
+target-version = "py311"
+line-length = 100
+extend-exclude = ["notebook", "venv"]
+
+[lint]
+select = ["E", "F"]
+ignore = ["E501"]

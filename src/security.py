@@ -107,6 +107,64 @@ def mask_pii(text: str, mask_names: bool = False) -> str:
     return masked
 
 
+# --------------------------------------------------------------------------- #
+# Secrets and email-header safety
+# --------------------------------------------------------------------------- #
+_SECRET_PATTERNS = [
+    re.compile(r"xkeysib-[A-Za-z0-9_-]{8,}", re.IGNORECASE),
+    re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+    re.compile(r"(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{12,}"),
+]
+
+_STRICT_EMAIL_RE = re.compile(
+    r"^(?P<local>[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64})@"
+    r"(?P<domain>[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)$"
+)
+
+
+def has_header_injection(value: Any) -> bool:
+    """True if a value contains CR/LF or NUL and cannot be used in a header."""
+    text = "" if value is None else str(value)
+    return bool(re.search(r"[\r\n\x00]", text))
+
+
+def is_valid_email(value: Any) -> bool:
+    """Strict single-address validation for outbound recipient/sender fields."""
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text or len(text) > 254 or has_header_injection(text):
+        return False
+    if text.count("@") != 1 or ".." in text:
+        return False
+    match = _STRICT_EMAIL_RE.fullmatch(text)
+    return bool(match)
+
+
+def scrub_secrets(text: Any, secrets: Iterable[str] = ()) -> str:
+    """Remove known secret values and common credential patterns from text."""
+    cleaned = "" if text is None else str(text)
+    for secret in secrets:
+        if secret is None:
+            continue
+        value = str(secret)
+        if value:
+            cleaned = cleaned.replace(value, "[REDACTED]")
+    for pattern in _SECRET_PATTERNS:
+        cleaned = pattern.sub("[REDACTED]", cleaned)
+    return cleaned
+
+
+def safe_error(exc: BaseException, secrets: Iterable[str] = ()) -> str:
+    """Exception text with secrets (and optionally PII) removed for display/logging."""
+    return mask_pii(scrub_secrets(str(exc), secrets))
+
+
 def safe_preview(text: str, limit: int = 60, mask_names: bool = False) -> str:
     """Mask PII *before* truncating, so a cut-off email/phone cannot leak.
 
@@ -243,13 +301,17 @@ def require(capability: str):
 
 
 __all__ = [
-    "mask_pii",
-    "safe_preview",
-    "mask_pii_in_obj",
+    "AccessDeniedError",
     "PiiMaskingFilter",
-    "get_secure_logger",
     "Role",
     "SecurityContext",
-    "AccessDeniedError",
+    "get_secure_logger",
+    "has_header_injection",
+    "is_valid_email",
+    "mask_pii",
+    "mask_pii_in_obj",
     "require",
+    "safe_error",
+    "safe_preview",
+    "scrub_secrets",
 ]

@@ -78,10 +78,23 @@ commit metadata even when the working tree is clean.
 
 ## Prompt-injection and LLM safety
 
-Resume and email content is untrusted. The pipeline sanitises it with
-`src/sanitize.py` before it reaches an LLM and keeps scoring deterministic. The
-synthetic dataset includes an injection sample so the defense is tested. Do not
-remove sanitisation when adding new tools or agents.
+Resume, JD, and reply content is untrusted data, never instructions. The
+quarantined extractor has no tools and receives PII-minimised text. Every
+extracted skill, years claim, and education entry must cite an exact quote from
+the source or it is dropped (`src/extractor.py`). Injection indicators and
+hidden PDF text set `needs_human_review`; large LLM-vs-regex disagreement does
+the same. Scoring remains deterministic (`src/scoring.py`).
+
+All model-callable tools are allow-listed and role/capability checked in
+`src/guardrails.py`; arguments containing CR/LF/NUL or invalid email addresses
+are rejected. There is deliberately **no send-email tool**. Drafts enter
+`src/approval.py`, are previewed by HR, and only an explicitly approved draft
+can reach the deterministic mailer.
+
+Per-run budgets (`MAX_LLM_CALLS`, `MAX_TOKENS`, `MAX_SECONDS`) stop model work
+and degrade to deterministic mode rather than failing open. Trace spans are
+bounded and PII-masked. Do not remove sanitisation, quote verification, approval
+gates, or budget checks when adding tools or agents.
 
 ## Access control
 
@@ -101,10 +114,31 @@ non-phone numbers. Audit decisions are stored in `SecurityContext.audit_log`.
 When a role lacks a permission, the affected stage is skipped and the denial is
 recorded instead of crashing the pipeline.
 
+### UI authentication
+
+The Gradio app refuses to start unless `HR_USERS` is configured or
+`HR_ALLOW_NO_AUTH=1` is set for local development. With authentication enabled,
+the app binds to `0.0.0.0`; in no-auth mode it binds to `127.0.0.1` only.
+
+`HR_USERS` accepts `username:role:pbkdf2_hash` entries separated by `;` (or JSON).
+Generate a hash without writing the password to history:
+
+```bash
+python -m src.auth --hash-password 'your-password'
+```
+
+Logins are rate-limited by `HR_AUTH_MAX_FAILURES` and
+`HR_AUTH_LOCKOUT_SECONDS`; audit events are written to `HR_AUTH_AUDIT_LOG` with
+usernames and other PII masked. Passwords are never logged.
+
 ## Known limitations
 
-- The live Gemini agents are optional. Without `GOOGLE_API_KEY`, the
-  deterministic orchestrator runs the same skills and is the CI-tested path.
+- The live Gemini agents are optional. Without `GOOGLE_API_KEY`/`GEMINI_MODEL`,
+  the deterministic orchestrator runs the same skills and is the CI-tested path.
+- Hidden-PDF-text detection is a content-stream heuristic (pypdf), not an OCR or
+  rendering comparison. Treat any hidden-text flag as a reason for human review.
+- Approval is enforced in the application/mailer path. Operators who call the
+  Brevo transport directly bypass that gate.
 - Thresholds and interview timezone are environment-driven (`src/config.py`);
   changing them does not change the deterministic scoring formula.
 - The UI's email features send real mail if configured with real credentials.

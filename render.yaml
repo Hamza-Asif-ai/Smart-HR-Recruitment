@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: smart-hr-recruitment
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: HR_USERS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_OAUTH_REFRESH_TOKEN
+        sync: false
+      - key: HR_DATA_ROOT
+        value: /app/data
+      - key: PORT
+        value: "10000"

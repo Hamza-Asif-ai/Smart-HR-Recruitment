@@ -34,7 +34,7 @@ def test_year_ranges_use_full_years_and_merge_overlaps():
     )
     assert skills.estimate_experience_years(text) == 5.0
 
-    present = f"Engineer, Acme (2017 - Present)"
+    present = "Engineer, Acme (2017 - Present)"
     expected = datetime.now().year - 2017
     assert skills.estimate_experience_years(present) == expected
 
@@ -184,15 +184,16 @@ def test_interview_slots_use_the_configured_timezone():
     assert not other[0].endswith("IST")
 
 
-# h) Dead code and unused dependencies ------------------------------------------------
-def test_dead_modules_and_unused_dependencies_are_removed():
-    assert not (ROOT / "src" / "memory.py").exists()
-    assert not (ROOT / "src" / "budget.py").exists()
+# h) Unused dependencies and superseded agent stubs --------------------------------
+def test_phase3_modules_and_required_dependencies_exist():
+    for module in ("memory.py", "budget.py", "extractor.py", "scoring.py",
+                   "guardrails.py", "approval.py", "coordinator.py"):
+        assert (ROOT / "src" / module).exists(), module
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
-    for dependency in ("tenacity", "pydantic", "chromadb"):
+    assert "pydantic" in requirements
+    for dependency in ("tenacity", "chromadb"):
         assert dependency not in requirements
     for name in (
-        "build_email_writer_agent",
         "build_planner_agent",
         "build_reflection_agent",
         "build_reply_classifier_agent",

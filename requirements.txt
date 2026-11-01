@@ -5,7 +5,8 @@ google-genai==2.10.0
 # MCP server (filesystem tools exposed to agents)
 mcp==1.28.1
 
-# Data handling, parsing, visualization
+# Data handling, parsing, visualization, validated model schemas
+pydantic==2.13.4
 pandas==3.0.3
 matplotlib==3.11.0
 pypdf==6.14.2

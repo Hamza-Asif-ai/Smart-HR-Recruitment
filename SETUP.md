@@ -143,16 +143,29 @@ Set them the same way as `HR_DATA_ROOT` (for example
 ## 6. (Optional) Gemini API key — only for LIVE LLM agents
 
 Without a key the project automatically uses the **deterministic skill runner**, so the
-full pipeline still runs and produces real output. To try the optional ADK
-`SequentialAgent` path (four `LlmAgent`s + deterministic stage tools):
+full pipeline still runs and produces real output. Phase 3 also requires a model id:
 
 ```powershell
-python -m src.orchestrator --agents
+$env:GEMINI_MODEL="your-available-model-id"   # required for Phase 3
+$env:GOOGLE_API_KEY="your-key-here"
 ```
 
-If the model call fails or returns invalid results, the pipeline falls back to
-the deterministic runner automatically. The agent path never sends resume text
-to the model; it receives counts and status summaries only.
+Startup validates the model with the Gemini API. The quarantined extractor is
+the only LLM that receives resume text (PII-minimised), and every claim must
+quote the source. Model failure, invalid JSON, or budget exhaustion falls back
+to regex extraction with a visible banner. The legacy ADK path can still be run
+with `python -m src.orchestrator --agents`.
+
+Budgets and review thresholds (optional):
+
+```powershell
+$env:MAX_LLM_CALLS="24"
+$env:MAX_TOKENS="60000"
+$env:MAX_SECONDS="120"
+$env:SKILL_DISAGREEMENT_THRESHOLD="0.35"
+$env:REPLY_CONFIDENCE_THRESHOLD="0.65"
+$env:HR_MEMORY_HMAC_KEY="a-long-random-secret"  # stable across restarts
+```
 
 1. Get a free key from <https://aistudio.google.com>.
 2. Set it as an environment variable:
@@ -249,12 +262,66 @@ The notebook and Gradio UI additionally produce `ranked_candidates.json`,
 *Need the live LLM agents? See Section 6. Otherwise everything runs offline in deterministic mode.*
 
 
+## Connect Gmail and Calendar (optional)
+
+1. Create a Google Cloud OAuth client of type **Web application**.
+2. Add `http://localhost:8080/oauth2callback` as an authorized redirect URI.
+3. Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, then run:
+
+```bash
+python -m src.google_oauth
+```
+
+The flow requests only `gmail.readonly` and `calendar.freebusy`. The refresh
+token is saved to the git-ignored `data/output/google_oauth_token.json`. For a
+container or cloud host, set `GOOGLE_OAUTH_REFRESH_TOKEN` instead of shipping the
+token file. Interview invitations are still sent through Brevo after approval.
+
+### Docker / Render
+
+```bash
+docker build -t smart-hr-recruitment .
+docker run -p 10000:10000 -e HR_USERS='...' smart-hr-recruitment
+```
+
+`HR_USERS` must be set in containers so the app binds publicly with login
+enabled. `render.yaml` deploys the same Dockerfile; add the OAuth and Gemini
+secrets in the Render dashboard.
+
+
 ## Environment Variables (Agentic Features)
 
-- `GOOGLE_API_KEY` - Google Gemini API key for the optional ADK pipeline
-  (`--agents` / `use_agents=True`). Without it, the deterministic offline
-  pipeline is used.
-- `GEMINI_API_KEY` - Legacy alias accepted by the orchestrator.
+- `GOOGLE_API_KEY` / `GEMINI_API_KEY` - Google Gemini API key for Phase 3 and
+  the optional ADK pipeline. Without it, the deterministic offline pipeline is
+  used.
+- `GEMINI_MODEL` - Model id for the Phase 3 extractor. No model name is
+  hardcoded; an unavailable id fails startup with a clear error.
+- `MAX_LLM_CALLS`, `MAX_TOKENS`, `MAX_SECONDS` - Per-run budgets. Exceeding any
+  of them degrades to deterministic mode and shows a banner.
+- `SKILL_DISAGREEMENT_THRESHOLD` - LLM-vs-regex review threshold (default 0.35).
+- `REPLY_CONFIDENCE_THRESHOLD` - Reply auto-triage threshold (default 0.65).
+- `HR_MEMORY_DB`, `HR_MEMORY_HMAC_KEY` - Advisory SQLite memory path and stable
+  HMAC key. Raw candidate emails are never stored.
+- `HR_APPROVAL_QUEUE_MAX_SIZE` - Maximum pending drafts awaiting approval.
 - `BROWSER_STATE_SECRET` - Enables Gradio `BrowserState`; without it the UI uses
   session-only `gr.State`.
 - `HR_DATA_ROOT` - Data directory (default: `./data`).
+- `HR_USERS` - UI accounts as `username:role:pbkdf2_hash` entries separated by
+  `;`, or JSON. Generate a hash with
+  `python -m src.auth --hash-password 'your-password'`. The app refuses to start
+  without this variable.
+- `HR_ALLOW_NO_AUTH` - Set to `1` for local development without `HR_USERS`. The
+  app then listens on `127.0.0.1` only. Never use this on a public host.
+- `HR_AUTH_MAX_FAILURES`, `HR_AUTH_LOCKOUT_SECONDS` - Login lockout tuning
+  (defaults: 5 failures, 300 seconds).
+- `HR_AUTH_AUDIT_LOG` - Path for the JSONL authentication audit log.
+- `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` - Google OAuth client
+  used for the read-only Gmail and Calendar scopes.
+- `GOOGLE_OAUTH_REDIRECT_URI` - OAuth callback (default
+  `http://localhost:8080/oauth2callback`).
+- `GOOGLE_OAUTH_REFRESH_TOKEN` - Refresh token supplied as a secret instead of a
+  token file.
+- `GOOGLE_OAUTH_TOKEN_FILE` - Override the git-ignored token path.
+- `CALENDAR_ID`, `CALENDAR_LOOKAHEAD_DAYS`, `INTERVIEW_SLOT_MINUTES` - Calendar
+  used for free/busy, the lookahead window, and interview length.
+- `HR_WORKSPACE_FILE` - Saved multi-job workspace JSON path.

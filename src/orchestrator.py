@@ -28,6 +28,8 @@ from typing import Any, Dict, List
 
 from . import config
 from . import mcp_filesystem_server as fs
+from . import phase3_runner
+from . import runtime
 from . import skills
 from .sanitize import sanitize_untrusted_text
 from .security import SecurityContext, Role, get_secure_logger, mask_pii, safe_preview
@@ -257,6 +259,116 @@ def run_pipeline(role: str = "recruiter", jd_filename: str = "",
     }
 
 
+# --------------------------------------------------------------------------- #
+# Phase 3 - validated extractor + deterministic scorer + approval queue
+# --------------------------------------------------------------------------- #
+def run_phase3_pipeline(role: str = "recruiter", jd_filename: str = "",
+                        *, model: str = "", use_llm: bool = True,
+                        blind: bool = False,
+                        run_context: Any = None) -> Dict[str, Any]:
+    """Run the Phase 3 pipeline.
+
+    The LLM is confined to quote-verified extraction. Scoring, confidence,
+    disagreement, ranking and drafting are deterministic. Model failures or
+    budget exhaustion degrade to the regex extractor; nothing is ever sent.
+    """
+    from . import extractor
+    from .approval import ApprovalQueue
+    from .memory import CandidateMemory
+
+    role_obj = Role(role)
+    ctx = SecurityContext(user="pipeline_runner", role=role_obj)
+    rc = run_context or runtime.new_run_context(
+        max_steps=max(20, len(fs.list_resumes()) * 3 + 10)
+    )
+    requirements = run_jd_agent(ctx, jd_filename)
+
+    selected_model = ""
+    llm_enabled = bool(use_llm and _has_llm_api_key())
+    if llm_enabled:
+        try:
+            selected_model = extractor.resolve_model(model)
+        except Exception:
+            llm_enabled = False
+
+    try:
+        memory = CandidateMemory()
+    except Exception:
+        memory = None
+
+    ranked: List[Dict[str, Any]] = []
+    degraded = not llm_enabled
+    degradation_reason = "" if llm_enabled else (
+        "no LLM key/model configured" if use_llm else "deterministic mode requested")
+
+    for fname in fs.list_resumes():
+        raw = fs.read_resume(fname)
+        hidden = None
+        if fname.lower().endswith(".pdf"):
+            try:
+                hidden = extractor.detect_hidden_pdf_text(
+                    fs._safe_path(fs.RESUME_DIR, fname).read_bytes())
+            except Exception:
+                hidden = None
+
+        result = phase3_runner.analyze_resume_text(
+            raw,
+            requirements,
+            source_id=fname,
+            run_context=rc,
+            memory=memory,
+            model=selected_model,
+            llm_enabled=llm_enabled,
+            hidden_report=hidden,
+            blind=blind,
+        )
+        if result.get("extraction_mode") == "degraded":
+            degraded = True
+            degradation_reason = rc.budget.degraded_reason or "model unavailable"
+        if not ctx.can("view_unmasked_pii"):
+            result["_raw_email"] = result["email"]
+            result["email"] = mask_pii(result["email"])
+            result["name"] = mask_pii(result["name"], mask_names=True)
+        ranked.append(result)
+
+    ranked.sort(key=lambda c: c["match_percent"], reverse=True)
+    for rank, candidate in enumerate(ranked, start=1):
+        candidate["rank"] = rank
+
+    if ctx.can("send_invitations"):
+        drafts = run_scheduler(ctx, ranked, role_title=requirements["title"])
+    else:
+        drafts = []
+        ctx.audit_log.append({
+            "user": ctx.user,
+            "role": ctx.role.value,
+            "capability": "send_invitations",
+            "granted": False,
+        })
+
+    queue = ApprovalQueue()
+    pending = queue.stage_many(drafts)
+    insights = run_insights(ctx, requirements, ranked, drafts)
+    insights["degraded"] = degraded
+    insights["degradation_banner"] = rc.budget.banner() if rc.budget.degraded else (
+        f"Agentic mode unavailable: {degradation_reason}. Deterministic results shown."
+        if degraded else "")
+    insights["budget"] = rc.budget.snapshot()
+    insights["trace"] = rc.trace.get_traces(limit=1000)
+
+    log.info("=== Phase 3 pipeline complete (%s) ===", "degraded" if degraded else "validated")
+    return {
+        "mode": "phase3_degraded" if degraded else "phase3_agentic",
+        "jd_requirements": requirements,
+        "ranked_candidates": ranked,
+        "interview_emails": [p.as_dict() for p in pending],
+        "pending_drafts": [p.as_dict() for p in pending],
+        "insights": insights,
+        "audit_log": ctx.audit_log,
+        "degradation_banner": insights["degradation_banner"],
+    }
+
+
 async def run_adk_pipeline_async(role: str = "recruiter", jd_filename: str = "",
                                  model: str = "") -> Dict[str, Any]:
     """Run the four ADK stage agents and return their deterministic results.
@@ -383,10 +495,18 @@ def _main(argv: List[str] | None = None) -> int:
                         choices=[r.value for r in Role])
     parser.add_argument("--jd", default="", help="Optional job description filename")
     parser.add_argument("--agents", action="store_true",
-                        help="Try the optional ADK path, falling back if unavailable")
+                        help="Try the legacy four-stage ADK path, falling back if unavailable")
+    parser.add_argument("--phase3", action="store_true",
+                        help="Run Phase 3 validated extraction with deterministic fallback")
+    parser.add_argument("--blind", action="store_true",
+                        help="Mask candidate names before parsing/scoring")
     args = parser.parse_args(argv)
 
-    result = run_pipeline(role=args.role, jd_filename=args.jd, use_agents=args.agents)
+    if args.phase3:
+        result = run_phase3_pipeline(args.role, args.jd, use_llm=True,
+                                     blind=args.blind)
+    else:
+        result = run_pipeline(role=args.role, jd_filename=args.jd, use_agents=args.agents)
     insights = result["insights"]
     summary = {
         "mode": result["mode"],
@@ -398,6 +518,7 @@ def _main(argv: List[str] | None = None) -> int:
         "unreadable_resumes": insights.get("unreadable_resumes", 0),
         "keyword_stuffing_suspected": insights.get("keyword_stuffing_suspected", 0),
         "report_path": insights["report_path"],
+        "degradation_banner": result.get("degradation_banner", ""),
     }
     print(json.dumps(summary, indent=2))
     return 0

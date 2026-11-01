@@ -157,7 +157,6 @@ def _is_placeholder_secret(value: str) -> bool:
 def scan_text(text: str, label: str, start_line: int = 1) -> Iterator[Issue]:
     """Yield issues from a block of text."""
     for match in EMAIL_RE.finditer(text):
-        email = match.group(1)
         domain = match.group(2)
         if not _is_allowed_email(domain):
             yield Issue(label, _line_of(text, match.start(), start_line), "email", f"non-example domain {domain}")

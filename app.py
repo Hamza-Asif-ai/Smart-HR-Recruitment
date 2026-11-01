@@ -12,41 +12,143 @@ Deploy on Hugging Face Spaces:
     3. Space auto-installs from requirements.txt and launches app.py
 
 Email sending/receiving:
-    - Uses Gmail SMTP (send) and IMAP (read replies) with an App Password.
-    - Credentials are entered in the UI at runtime and are NEVER written to disk.
+    - Reads Gmail through the read-only Gmail API using Google OAuth.
+    - Sends interview invitations through Brevo; the Brevo key is entered in
+      the UI at runtime and is never written to disk.
 """
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import html as _html
-import imaplib
 import email as email_lib
 import email.utils
 import email.header
-import smtplib
 import requests
 import zipfile
+import threading
 from io import BytesIO
 from collections import Counter
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 import pypdf
+from src import auth as auth_mod
+from src import calendar_api
 from src import config
+from src import exporters
+from src import extractor as extractor_mod
+from src import gmail_api
+from src import google_oauth
+from src import guardrails as guardrails_mod
+from src import phase3_runner
+from src import runtime
+from src import scorecard
 from src import skills as skills_mod
+from src import workspace as workspace_mod
+from src.approval import (
+    ApprovalQueue,
+    ApprovalRequiredError,
+    send_approved_draft,
+)
+from src.memory import CandidateMemory
+from src.security import (
+    AccessDeniedError,
+    Role,
+    SecurityContext,
+    has_header_injection,
+    is_valid_email,
+    safe_error,
+    scrub_secrets,
+)
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import gradio as gr
 
-from src import tracing
 import json
-from tempfile import NamedTemporaryFile
-
 os.environ.setdefault("HR_DATA_ROOT", "./data")
+
+
+# --------------------------------------------------------------------------- #
+# Startup validation and per-session identity
+# --------------------------------------------------------------------------- #
+_MEMORY_STORE = None
+_MEMORY_LOCK = threading.Lock()
+
+
+def _candidate_memory():
+    """Return the process-wide memory store (keyed by HMAC(email) only)."""
+    global _MEMORY_STORE
+    with _MEMORY_LOCK:
+        if _MEMORY_STORE is None:
+            try:
+                _MEMORY_STORE = CandidateMemory()
+            except Exception:
+                _MEMORY_STORE = None
+        return _MEMORY_STORE
+
+
+def _remember_candidate(email, decision, reason=""):
+    store = _candidate_memory()
+    if store is None or not email:
+        return
+    try:
+        store.remember_candidate(email, decision, reason)
+    except Exception:
+        pass
+
+
+def validate_startup():
+    """Fail closed when no HR users are configured unless explicitly local-only."""
+    auth_manager = auth_mod.get_auth_manager()
+    runtime.cleanup_temp_files()
+    # Validate GEMINI_MODEL at startup, not on the first user request.
+    try:
+        phase3_runner.model_status()
+    except Exception:
+        pass
+    return auth_manager
+
+
+def _identity_from_request(request):
+    """Resolve the signed-in user for a Gradio event.
+
+    ``request is None`` only happens for direct Python calls/tests, never for a
+    network request handled by Gradio, so it is treated as the local admin.
+    """
+    if request is None:
+        return auth_mod.UserRecord(username="system", role=Role.ADMIN,
+                                   password_hash=""), None
+    manager = auth_mod.get_auth_manager()
+    if not manager.enabled:
+        return auth_mod.UserRecord(username="local", role=Role.ADMIN,
+                                   password_hash=""), manager
+    username = str(getattr(request, "username", "") or "").strip().lower()
+    record = manager.users.get(username)
+    if record is None:
+        raise AccessDeniedError("Not signed in.")
+    return record, manager
+
+
+def _authorized(request, capability):
+    """True when the current session may perform ``capability``."""
+    record, manager = _identity_from_request(request)
+    ctx = SecurityContext(user=record.username, role=record.role)
+    try:
+        ctx.authorize(capability)
+        return True
+    except AccessDeniedError:
+        if manager is not None:
+            manager.audit_event("access_denied", record.username, record.role, capability)
+        return False
+
+
+def _denied_html(capability=""):
+    detail = f" ({_html.escape(capability)})" if capability else ""
+    return f'<div class="status-line err">⛔ Your role is not allowed to do that{detail}.</div>'
+
 
 # --------------------------------------------------------------------------- #
 # Theme & styling
@@ -174,6 +276,29 @@ table.cand-table tr:hover td {background:#181826;}
              background:rgba(139,92,246,0.12); color:#c4b5fd; border:1px solid rgba(139,92,246,0.25);}
 .skill-chip.missing {background:rgba(244,63,94,0.08); color:#fca5a5; border-color:rgba(251,113,133,0.2);}
 
+/* ---------- Candidate score cards ---------- */
+.score-card-grid {display:grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+                  gap:16px; align-items:start;}
+.score-card {border:1px solid #26263a; border-radius:16px; padding:18px;
+             background: linear-gradient(165deg, rgba(99,102,241,0.10), rgba(18,18,28,0.96));}
+.score-card-head {display:flex; align-items:flex-start; justify-content:space-between; gap:12px;}
+.score-card-name {font-weight:700; color:#f1f1f8; font-size:1rem;}
+.score-card-score {text-align:right; flex-shrink:0;}
+.score-card-score .match-pct {font-size:1.2rem; width:auto;}
+.score-card-meta {color:#8b8ba7; font-size:0.75rem; margin:8px 0 12px 0;}
+.score-card-section-title {color:#9694b5; font-size:0.7rem; letter-spacing:.08em;
+                           text-transform:uppercase; font-weight:700; margin:14px 0 7px 0;}
+.score-quote {border-left:2px solid #6366f1; background:rgba(99,102,241,0.07);
+              border-radius:0 8px 8px 0; padding:8px 11px; margin-bottom:7px;}
+.score-quote-label {color:#a5b4fc; font-size:0.7rem; font-weight:700; text-transform:uppercase;
+                    letter-spacing:.04em;}
+.score-quote-text {color:#dcdce8; font-size:0.82rem; line-height:1.45; margin-top:2px;}
+.why-not {margin-top:14px; border:1px solid rgba(251,113,133,0.25); border-radius:10px;
+          background:rgba(244,63,94,0.06); padding:10px 12px;}
+.why-not-title {color:#fca5a5; font-size:0.74rem; font-weight:700; text-transform:uppercase;
+                letter-spacing:.05em; margin-bottom:5px;}
+.why-not ul {margin:0; padding-left:18px; color:#fecdd3; font-size:0.8rem; line-height:1.5;}
+
 
 /* ---------- Creator credit ---------- */
 .credit-line {display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;
@@ -241,7 +366,8 @@ def creator_credit_html():
 
 
 def stat_card(number, label):
-    return f'<div class="stat-card"><div class="num">{number}</div><div class="lbl">{label}</div></div>'
+    return (f'<div class="stat-card"><div class="num">{_html.escape(str(number))}</div>'
+            f'<div class="lbl">{_html.escape(str(label))}</div></div>')
 
 
 REC_CHIP = {
@@ -257,11 +383,19 @@ def render_candidate_table(ranked):
     rows_html = []
     for c in ranked:
         cls, label = REC_CHIP.get(c["recommendation"], ("review", c["recommendation"]))
+        label = _html.escape(str(label))
         rank_cls = "rank-badge top" if c["rank"] <= 3 else "rank-badge"
         name = _html.escape(c["name"])
         email_addr = _html.escape(c["email"])
         pct = c["match_percent"]
-        conf = c.get('_confidence', 'N/A')
+        conf = c.get("confidence", c.get('_confidence', 'N/A'))
+        mode = c.get("extraction_mode", "deterministic")
+        review = bool(c.get("needs_human_review"))
+        hint = c.get("memory_hint")
+        review_html = ('<span class="chip review" style="margin-left:6px;">Human review</span>'
+                       if review else "")
+        hint_html = (f'<div class="cand-email">🧠 {_html.escape(str(hint))}</div>'
+                     if hint else "")
 
         matched = c.get("matched_required", []) or []
         missing = c.get("missing_required", []) or []
@@ -280,19 +414,19 @@ def render_candidate_table(ranked):
         rows_html.append(f"""
         <tr>
           <td><span class="{rank_cls}">{c['rank']}</span></td>
-          <td><div class="cand-name">{name}</div><div class="cand-email">{email_addr}</div></td>
+          <td><div class="cand-name">{name}</div><div class="cand-email">{email_addr}</div>{hint_html}</td>
           <td>
             <div class="match-cell" style="flex-direction:column; align-items:flex-start; gap:4px;">
               <div style="display:flex; align-items:center; gap:8px; width:100%;">
                 <div class="match-bar-bg"><div class="match-bar-fill" style="width:{pct}%;"></div></div>
                 <div class="match-pct">{pct}%</div>
               </div>
-              <div style="font-size:0.75rem; color:#a5b4fc;">{pct}% Match · {conf}% Conf</div>
+              <div style="font-size:0.75rem; color:#a5b4fc;">{pct}% Match · {conf}% Conf · {_html.escape(str(mode))}</div>
             </div>
           </td>
           <td style="white-space:nowrap; {exp_style}">{exp_txt}</td>
           <td><div class="skills-row">{chips}</div></td>
-          <td><span class="chip {cls}">{label}</span></td>
+          <td><span class="chip {cls}">{label}</span>{review_html}</td>
         </tr>""")
     if not rows_html:
         return '<div class="empty-state">No candidates yet — fill in the job requirements and scan the inbox.</div>'
@@ -319,10 +453,12 @@ def render_emails(emails):
     for e in emails:
         fallback = e["to"].split("@")[0].replace(".", " ").title()
         name = (e.get("candidate") or "").strip() or _extract_first_name(e.get("body", ""), fallback)
-        initials = "".join([p[0].upper() for p in name.split()[:2]]) or "?"
+        initials = _html.escape("".join([p[0].upper() for p in name.split()[:2]]) or "?")
         subject = _html.escape(e["subject"])
         body = _bold_inline(e.get("body_md") or e["body"])
         to_addr = _html.escape(e["to"])
+        ics_chip = (f'<span class="attach-chip">📅 {_html.escape(str(e.get("ics_filename")))}</span>'
+                    if e.get("ics_filename") else "")
         cards.append(f"""
         <div class="email-card">
           <div class="email-top">
@@ -332,7 +468,7 @@ def render_emails(emails):
               <div class="email-addr">{to_addr}</div>
             </div>
           </div>
-          <div class="email-subject">✉ {subject}</div>
+          <div class="email-subject">✉ {subject} {ics_chip}</div>
           <div class="email-body">{body}</div>
         </div>""")
     return "".join(cards)
@@ -405,6 +541,11 @@ def make_skills_chart(top_skills):
 # --------------------------------------------------------------------------- #
 # Email sending (SMTP) & replies (IMAP) — credentials come from the UI only
 # --------------------------------------------------------------------------- #
+def _error_html(ex, secrets=()):
+    """Escape and scrub exception text before it reaches the UI."""
+    return _html.escape(safe_error(ex, secrets))
+
+
 def send_all_emails(sender_email, sender_name, brevo_api_key, emails_state):
     """
     Sends interview emails via the Brevo transactional email HTTP API.
@@ -414,46 +555,110 @@ def send_all_emails(sender_email, sender_name, brevo_api_key, emails_state):
     (no domain purchase needed) and send to any recipient after that.
     Returns (status_html, list_of_successfully_sent_email_dicts).
     """
+    sender_email = (sender_email or "").strip()
+    sender_name = (sender_name or "HR Team").strip()
+    brevo_api_key = (brevo_api_key or "").strip()
     if not sender_email or not brevo_api_key:
         return '<div class="status-line err">⚠ Please enter both the sender email and the Brevo API key.</div>', []
+    if not is_valid_email(sender_email):
+        return '<div class="status-line err">⚠ The sender email address is not valid.</div>', []
+    if has_header_injection(sender_name):
+        return '<div class="status-line err">⚠ The sender name contains invalid characters.</div>', []
     if not emails_state:
         return '<div class="status-line err">⚠ No emails to send.</div>', []
 
+    secrets = (brevo_api_key, sender_email)
     url = "https://api.brevo.com/v3/smtp/email"
     headers = {
         "accept": "application/json",
         "api-key": brevo_api_key,
         "content-type": "application/json",
     }
-    lines = []
-    sent_ok = []
-    for e in emails_state:
-        payload = {
-            "sender": {"name": sender_name or "HR Team", "email": sender_email},
-            "to": [{"email": e["to"]}],
-            "subject": e["subject"],
-            "textContent": e["body"],
-        }
-        if e.get("html"):
-            payload["htmlContent"] = e["html"]
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=20)
-            if resp.status_code in (200, 201):
-                lines.append(f'<div class="status-line ok">✅ Sent to {_html.escape(e["to"])}</div>')
-                sent_ok.append(e)
-            else:
-                try:
-                    detail = resp.json().get("message", resp.text)
-                except Exception:
-                    detail = resp.text
-                lines.append(
-                    f'<div class="status-line err">❌ {_html.escape(e["to"])} — '
-                    f'{resp.status_code}: {_html.escape(str(detail))}</div>'
-                )
-        except Exception as ex:
-            lines.append(f'<div class="status-line err">❌ {_html.escape(e["to"])} — {_html.escape(str(ex))}</div>')
 
-    lines.append(f'<div class="status-line info">📨 {len(emails_state)} email(s) processed.</div>')
+    # Validate, de-duplicate (case-insensitive recipient), and cap one batch.
+    lines = []
+    unique = []
+    seen = set()
+    invalid = 0
+    duplicates = 0
+    for e in emails_state:
+        if not isinstance(e, dict):
+            invalid += 1
+            continue
+        recipient = str(e.get("to", "")).strip()
+        if not is_valid_email(recipient) or has_header_injection(e.get("subject", "")):
+            invalid += 1
+            continue
+        key = recipient.lower()
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        unique.append({**e, "to": recipient})
+
+    if invalid:
+        lines.append(
+            f'<div class="status-line err">⚠ Skipped {invalid} email(s) with an invalid '
+            'recipient or header value.</div>'
+        )
+    if duplicates:
+        lines.append(f'<div class="status-line info">ℹ Ignored {duplicates} duplicate recipient(s).</div>')
+
+    batch_limit = max(1, int(config.BREVO_BATCH_LIMIT))
+    if len(unique) > batch_limit:
+        lines.append(
+            f'<div class="status-line info">ℹ Batch capped at {batch_limit} email(s); '
+            f'{len(unique) - batch_limit} left for a later batch.</div>'
+        )
+        unique = unique[:batch_limit]
+
+    sent_ok = []
+    try:
+        with runtime.QUEUE_GATE.slot(timeout=30):
+            for e in unique:
+                payload = {
+                    "sender": {"name": sender_name or "HR Team", "email": sender_email},
+                    "to": [{"email": e["to"]}],
+                    "subject": e["subject"],
+                    "textContent": e["body"],
+                }
+                if e.get("html"):
+                    payload["htmlContent"] = e["html"]
+                ics_content = str(e.get("ics_content", "") or "")
+                if ics_content:
+                    payload["attachment"] = [{
+                        "name": str(e.get("ics_filename") or "interview.ics"),
+                        "content": base64.b64encode(ics_content.encode("utf-8")).decode("ascii"),
+                    }]
+                try:
+                    resp = requests.post(
+                        url, headers=headers, json=payload,
+                        timeout=config.BREVO_TIMEOUT_SECONDS,
+                    )
+                    if resp.status_code in (200, 201):
+                        lines.append(
+                            f'<div class="status-line ok">✅ Sent to {_html.escape(e["to"])}</div>'
+                        )
+                        sent_ok.append(e)
+                    else:
+                        try:
+                            detail = resp.json().get("message", resp.text)
+                        except Exception:
+                            detail = resp.text
+                        detail = scrub_secrets(str(detail), secrets)
+                        lines.append(
+                            f'<div class="status-line err">❌ {_html.escape(e["to"])} — '
+                            f'{resp.status_code}: {_html.escape(detail)}</div>'
+                        )
+                except Exception as ex:  # noqa: BLE001 - reported without secrets
+                    lines.append(
+                        f'<div class="status-line err">❌ {_html.escape(e["to"])} — '
+                        f'{_error_html(ex, secrets)}</div>'
+                    )
+    except runtime.QueueFullError:
+        return '<div class="status-line err">⚠ The server is busy. Try again shortly.</div>', []
+
+    lines.append(f'<div class="status-line info">📨 {len(unique)} email(s) processed.</div>')
     return "".join(lines), sent_ok
 
 
@@ -475,18 +680,93 @@ def _decode_mime_header(value: str) -> str:
 
 
 def _extract_plain_body(msg) -> str:
+    limit = config.IMAP_MAX_TEXT_CHARS
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == "text/plain" and not part.get("Content-Disposition"):
                 try:
-                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="ignore")
+                    raw = part.get_payload(decode=True) or b""
+                    if len(raw) > limit * 4:
+                        continue
+                    return raw.decode(
+                        part.get_content_charset() or "utf-8", errors="ignore"
+                    )[:limit]
                 except Exception:
                     continue
         return ""
     try:
-        return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="ignore")
+        raw = msg.get_payload(decode=True) or b""
+        if len(raw) > limit * 4:
+            return ""
+        return raw.decode(msg.get_content_charset() or "utf-8", errors="ignore")[:limit]
     except Exception:
         return ""
+
+
+def _gmail_client() -> gmail_api.GmailClient:
+    """Return a read-only Gmail client backed by the saved OAuth token."""
+    return gmail_api.GmailClient()
+
+
+def _attachment_payload(part):
+    """Decode one attachment only when it fits the configured size limit."""
+    limit = config.IMAP_MAX_ATTACHMENT_BYTES
+    try:
+        raw = part.get_payload(decode=False)
+    except Exception:
+        raw = None
+    if isinstance(raw, str) and len(raw) > (limit * 2) + 4096:
+        return None
+    try:
+        payload = part.get_payload(decode=True)
+    except Exception:
+        return None
+    if not isinstance(payload, (bytes, bytearray)) or len(payload) > limit:
+        return None
+    return bytes(payload)
+
+
+def _docx_text(payload: bytes):
+    """Extract DOCX text with uncompressed-size, ratio, and XML limits."""
+    try:
+        with zipfile.ZipFile(BytesIO(payload)) as zf:
+            infos = zf.infolist()
+            if len(infos) > 10_000:
+                return None
+            total_uncompressed = sum(max(0, info.file_size) for info in infos)
+            total_compressed = sum(max(1, info.compress_size) for info in infos)
+            if total_uncompressed > config.DOCX_MAX_UNCOMPRESSED_BYTES:
+                return None
+            if total_uncompressed / max(1, total_compressed) > config.DOCX_MAX_COMPRESSION_RATIO:
+                return None
+            document = next((i for i in infos if i.filename == "word/document.xml"), None)
+            if document is None or document.file_size > config.DOCX_MAX_XML_BYTES:
+                return None
+            with zf.open(document) as handle:
+                xml_bytes = handle.read(config.DOCX_MAX_XML_BYTES + 1)
+            if len(xml_bytes) > config.DOCX_MAX_XML_BYTES:
+                return None
+        xml = xml_bytes.decode("utf-8", errors="ignore")
+        xml = re.sub(r"</w:p>", "\n", xml)
+        xml = re.sub(r"<w:tab/>|<w:br/>", " ", xml)
+        text = _html.unescape(re.sub(r"<[^>]+>", "", xml))
+        return text[:config.IMAP_MAX_TEXT_CHARS]
+    except Exception:
+        return None
+
+
+def _pdf_text(payload: bytes):
+    """Extract PDF text, refusing documents above the configured page cap."""
+    try:
+        reader = pypdf.PdfReader(BytesIO(payload))
+        pages = reader.pages
+        if len(pages) > config.IMAP_MAX_PDF_PAGES:
+            return None
+        return "\n".join(
+            (page.extract_text() or "") for page in pages
+        )[:config.IMAP_MAX_TEXT_CHARS]
+    except Exception:
+        return None
 
 
 _INVITE_SUBJECT = "interview invitation"      # every invitation this app sends starts with this
@@ -502,8 +782,10 @@ def _core_subject(subject):
         t = t[m.end():]
 
 
-def handle_confirm(email, state):
+def handle_confirm(email, state, request: gr.Request = None):
     """Updates the candidate's status to "Confirmed" and shows a success message."""
+    if not _authorized(request, "send_invitations"):
+        return _denied_html("send_invitations"), state
     email_clean = (email or "").strip().lower()
     if not email_clean:
         return '<div class="status-line err">⚠ No email provided.</div>'
@@ -511,11 +793,14 @@ def handle_confirm(email, state):
     if "replies_status" not in new_state or not isinstance(new_state.get("replies_status"), dict):
         new_state["replies_status"] = {}
     new_state["replies_status"][email_clean] = "Confirmed"
+    _remember_candidate(email_clean, "interview", "candidate confirmed the interview")
     return (f'<div class="status-line ok">✅ { _html.escape(email) } status updated to <b>Confirmed</b>.</div>', new_state)
 
 
-def handle_reschedule(email, state):
+def handle_reschedule(email, state, request: gr.Request = None):
     """Triggers the email agent to draft a reschedule response."""
+    if not _authorized(request, "send_invitations"):
+        return _denied_html("send_invitations"), state
     email_clean = (email or "").strip().lower()
     if not email_clean:
         return '<div class="status-line err">⚠ No email provided.</div>'
@@ -526,8 +811,10 @@ def handle_reschedule(email, state):
     return (f'<div class="status-line info">📅 Reschedule request recorded for { _html.escape(email) }.</div>', new_state)
 
 
-def handle_decline(email, state):
+def handle_decline(email, state, request: gr.Request = None):
     """Marks the candidate as "Declined"."""
+    if not _authorized(request, "send_invitations"):
+        return _denied_html("send_invitations"), state
     email_clean = (email or "").strip().lower()
     if not email_clean:
         return '<div class="status-line err">⚠ No email provided.</div>'
@@ -535,99 +822,291 @@ def handle_decline(email, state):
     if "replies_status" not in new_state or not isinstance(new_state.get("replies_status"), dict):
         new_state["replies_status"] = {}
     new_state["replies_status"][email_clean] = "Declined"
+    _remember_candidate(email_clean, "reject", "candidate declined the interview")
     return (f'<div class="status-line ok">❌ { _html.escape(email) } marked as <b>Declined</b>.</div>', new_state)
 
 
-def check_replies(sender_email, app_password, emails_state=None):
-    """
-    Shows ONLY replies to the interview invitations this app sent — never the rest of the inbox.
-    A message counts when
-      - it is a reply ("Re:" subject or In-Reply-To/References header) whose subject is one of
-        our "Interview Invitation - ..." subjects — this works even after a page reload, when
-        the in-browser list of invited candidates (emails_state) is gone; or
-      - it comes from an address invited in this session and is not itself a job application
-        (covers a candidate who changed the subject or replied with a fresh message).
-    """
-    if not sender_email or not app_password:
-        return '<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>'
-
-    candidate_addrs = {e["to"].lower() for e in (emails_state or [])}
+def _scan_replies(emails_state=None):
+    """Return ``(status_html, reply_dicts)`` for replies to our invitations."""
+    candidate_addrs = {str(e.get("to", "")).lower() for e in (emails_state or [])
+                       if isinstance(e, dict)}
     replies = []
     try:
-        imap = imaplib.IMAP4_SSL("imap.gmail.com")
-        imap.login(sender_email, app_password)
-        imap.select("INBOX")
-        status, data = imap.search(None, "ALL")
-        ids = data[0].split()[-150:]  # last 150 messages, newest last
-        for msg_id in reversed(ids):
-            status, msg_data = imap.fetch(msg_id, "(RFC822)")
-            if not msg_data or not msg_data[0]:
-                continue
-            raw = msg_data[0][1]
-            msg = email_lib.message_from_bytes(raw)
-            subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
-            from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
-            body = _extract_plain_body(msg).strip()
-            is_reply_msg = (subject.strip().lower().startswith(("re:", "aw:", "sv:"))
-                            or msg.get("In-Reply-To") is not None
-                            or msg.get("References") is not None)
-            replies_to_invitation = is_reply_msg and _core_subject(subject).startswith(_INVITE_SUBJECT)
+        client = _gmail_client()
+        ids = client.list_message_ids(limit=config.IMAP_SCAN_LIMIT)
+    except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
+        return (f'<div class="status-line err">❌ Gmail: {_error_html(ex)}. '
+                'Reconnect Google OAuth in the Gmail inbox section.</div>', [])
 
-            from_invited = from_addr in candidate_addrs
-            looks_like_application = from_invited and (
-                _find_attachment_name(msg) is not None
-                or any(k in f"{subject} {body}".lower() for k in _APPLICATION_KEYWORDS))
+    for msg_id in ids:
+        try:
+            raw = client.get_raw(msg_id)
+        except (gmail_api.GmailAPIError, google_oauth.OAuthError):
+            continue
+        if not raw:
+            continue
+        msg = email_lib.message_from_bytes(raw)
+        subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
+        from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
+        is_reply_msg = (subject.strip().lower().startswith(("re:", "aw:", "sv:"))
+                        or msg.get("In-Reply-To") is not None
+                        or msg.get("References") is not None)
+        replies_to_invitation = is_reply_msg and _core_subject(subject).startswith(_INVITE_SUBJECT)
+        from_invited = from_addr in candidate_addrs
+        if not (replies_to_invitation or from_invited):
+            continue
 
-            if not (replies_to_invitation or (from_invited and not looks_like_application)):
-                continue
-            replies.append({
-                "from": from_addr,
-                "subject": subject,
-                "date": msg.get("Date", ""),
-                "body": body[:600],
-                "invited": from_addr in candidate_addrs,
-            })
-        imap.logout()
-    except imaplib.IMAP4.error as ex:
-        return f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>'
-    except Exception as ex:
-        return f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>'
+        body = _extract_plain_body(msg).strip()
+        looks_like_application = from_invited and (
+            _find_attachment_name(msg) is not None
+            or any(k in f"{subject} {body}".lower() for k in _APPLICATION_KEYWORDS))
+
+        if not (replies_to_invitation or (from_invited and not looks_like_application)):
+            continue
+        replies.append({
+            "from": from_addr,
+            "subject": subject,
+            "date": msg.get("Date", ""),
+            "body": body[:600],
+            "invited": from_invited,
+        })
 
     if not replies:
-        return '<div class="empty-state">No replies to your interview invitations found yet.</div>'
+        return '<div class="empty-state">No replies to your interview invitations found yet.</div>', []
 
     cards = []
-    for i, r in enumerate(replies):
-        badge = '<span class="attach-chip">✓ invited this session</span>' if r["invited"] else ""
-        # Lightweight deterministic intent hint for the UI. This is not an
-        # automated decision; the recruiter still chooses an action.
-        body_l = r["body"].lower()
-        if any(k in body_l for k in ["yes", "confirm", "available", "accept", "sure"]):
-            intent = "confirm"
-        elif any(k in body_l for k in ["reschedule", "change", "another time", "postpone"]):
-            intent = "reschedule"
-        elif any(k in body_l for k in ["no", "decline", "cannot", "not available", "pass"]):
-            intent = "decline"
-        else:
-            intent = "question"
-
-        action_buttons = f'''
-          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-            <button type="button" onclick="handleReplyAction(\'{_html.escape(r["from"])}\', \'confirm\', event)" style="padding:6px 12px; border-radius:8px; background:rgba(34,197,94,0.14); color:#4ade80; border:1px solid rgba(74,222,128,0.3); cursor:pointer;">Confirm</button>
-            <button type="button" onclick="handleReplyAction(\'{_html.escape(r["from"])}\', \'reschedule\', event)" style="padding:6px 12px; border-radius:8px; background:rgba(245,158,11,0.14); color:#fbbf24; border:1px solid rgba(251,191,36,0.3); cursor:pointer;">Reschedule</button>
-            <button type="button" onclick="handleReplyAction(\'{_html.escape(r["from"])}\', \'decline\', event)" style="padding:6px 12px; border-radius:8px; background:rgba(244,63,94,0.12); color:#fb7185; border:1px solid rgba(251,113,133,0.3); cursor:pointer;">Decline</button>
-            <span style="margin-left:auto; font-size:0.75rem; color:#a5b4fc;">Intent: {intent}</span>
-          </div>'''
+    for r in replies:
+        badge = ('<span class="attach-chip">✓ invited this session</span>'
+                 if r["invited"] else "")
+        # Same deterministic triage used by the reply_triage tool. It only
+        # suggests an intent; the recruiter still makes the decision.
+        triage = guardrails_mod.classify_reply(r["body"])
+        review_badge = (
+            '<span class="chip review" style="margin-left:6px;">Review</span>'
+            if triage.requires_human else ""
+        )
 
         cards.append(f"""
         <div class="reply-card">
-          <span class="reply-date">{_html.escape(r['date'])}</span>
-          <div class="email-to">{_html.escape(r['from'])} {badge}</div>
-          <div class="email-subject">✉ {_html.escape(r['subject'])}</div>
-          <div class="email-body">{_html.escape(r['body'])}</div>
-          {action_buttons}
+          <span class="reply-date">{_html.escape(str(r['date']))}</span>
+          <div class="email-to">{_html.escape(str(r['from']))} {badge}</div>
+          <div class="email-subject">✉ {_html.escape(str(r['subject']))}</div>
+          <div class="email-body">{_html.escape(str(r['body']))}</div>
+          <div style="margin-top:12px; font-size:0.75rem; color:#a5b4fc;">
+            Suggested intent: {_html.escape(triage.intent)} · {triage.confidence:.0%} confidence {review_badge}
+          </div>
         </div>""")
-    return f'<div class="reply-grid">{"".join(cards)}</div>'
+    return f'<div class="reply-grid">{"".join(cards)}</div>', replies
+
+
+def check_replies(emails_state=None, request: gr.Request = None):
+    """Show only replies to the interview invitations this app sent."""
+    if not _authorized(request, "read_resume"):
+        return _denied_html("read_resume")
+    status_html, _replies = _scan_replies(emails_state)
+    return status_html
+
+
+def check_replies_ui(emails_state=None, request: gr.Request = None):
+    """UI variant that also populates the real Gradio reply-picker control."""
+    if not _authorized(request, "read_resume"):
+        return _denied_html("read_resume"), gr.update(choices=[], value=None)
+    status_html, replies = _scan_replies(emails_state)
+    choices = []
+    for r in replies:
+        label = f"{r['from']} — {r['subject'][:60]}"
+        if (label, r["from"]) not in choices:
+            choices.append((label, r["from"]))
+    return status_html, gr.update(choices=choices, value=choices[0][1] if choices else None)
+
+
+def _oauth_status_html(verify: bool = False) -> str:
+    """Describe the local OAuth state without exposing tokens."""
+    try:
+        status = google_oauth.default_oauth().status()
+    except Exception as ex:  # noqa: BLE001 - configuration must never crash the page
+        return f'<div class="status-line err">❌ Google OAuth configuration error: {_error_html(ex)}</div>'
+    if not status.get("configured"):
+        return ('<div class="status-line info">ℹ Google OAuth is not configured. Set '
+                '<code>GOOGLE_OAUTH_CLIENT_ID</code> and '
+                '<code>GOOGLE_OAUTH_CLIENT_SECRET</code>, then click Connect.</div>')
+    if not status.get("token_present"):
+        return ('<div class="status-line info">🔑 OAuth client configured, but no token yet. '
+                'Click <b>Connect Google account</b> (local) or paste a refresh token below '
+                '(deployed).</div>')
+    if not verify:
+        return ('<div class="status-line ok">✅ Google OAuth token is saved. '
+                'Use <b>Check connection</b> to verify Gmail access.</div>')
+    try:
+        profile = gmail_api.GmailClient().profile()
+        email = _html.escape(str(profile.get("emailAddress", "")))
+        return f'<div class="status-line ok">✅ Connected to Gmail as <b>{email}</b>.</div>'
+    except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
+        return f'<div class="status-line err">❌ Gmail connection failed: {_error_html(ex)}</div>'
+    except Exception as ex:  # noqa: BLE001 - sanitized for display
+        return f'<div class="status-line err">❌ Gmail connection failed: {_error_html(ex)}</div>'
+
+
+def connect_google_oauth():
+    """Run the one-time localhost OAuth consent flow."""
+    try:
+        path = google_oauth.run_local_flow(open_browser=True, timeout_seconds=300)
+        return (f'<div class="status-line ok">✅ Google account connected. '
+                f'Token saved to <code>{_html.escape(path)}</code>.</div>')
+    except google_oauth.OAuthError as ex:
+        return f'<div class="status-line err">❌ OAuth failed: {_error_html(ex)}</div>'
+    except Exception as ex:  # noqa: BLE001 - sanitized for display
+        return f'<div class="status-line err">❌ OAuth failed: {_error_html(ex)}</div>'
+
+
+def save_google_refresh_token(refresh_token):
+    """Persist a deployment-provided refresh token (never echoed back)."""
+    token = (refresh_token or "").strip()
+    if not token:
+        return '<div class="status-line err">⚠ Paste a refresh token first.</div>'
+    try:
+        oauth = google_oauth.default_oauth()
+        google_oauth.save_token(
+            google_oauth.OAuthToken(access_token="", refresh_token=token, expires_at=0),
+            oauth.config.token_file,
+        )
+        oauth.reload()
+        return ('<div class="status-line ok">✅ Refresh token saved. '
+                'Use <b>Check connection</b> to verify Gmail access.</div>')
+    except Exception as ex:  # noqa: BLE001 - never echo the token
+        return f'<div class="status-line err">❌ Could not save the token: {_error_html(ex)}</div>'
+
+
+def _job_workspace() -> workspace_mod.JobWorkspace:
+    return workspace_mod.JobWorkspace(config.WORKSPACE_FILE)
+
+
+def _workspace_choices():
+    try:
+        jobs = _job_workspace().list_jobs()
+    except workspace_mod.WorkspaceError:
+        return []
+    return [
+        (f"{job['title']} — {job['company']}" if job.get("company") else job["title"], job["id"])
+        for job in jobs
+    ]
+
+
+def _workspace_update(message, selected=""):
+    return gr.update(choices=_workspace_choices(), value=selected or None), message
+
+
+def load_workspace_job(job_id):
+    """Load a saved job into the hiring form."""
+    if not job_id:
+        return (gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                '<div class="status-line err">⚠ Select a saved job first.</div>')
+    try:
+        job = _job_workspace().get(job_id)
+    except workspace_mod.WorkspaceError as ex:
+        return (gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                f'<div class="status-line err">❌ {_html.escape(str(ex))}</div>')
+    if not job:
+        return (gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                '<div class="status-line err">⚠ That job no longer exists.</div>')
+    _job_workspace().set_active(job["id"])
+    return (
+        job["title"],
+        job["company"],
+        ", ".join(job["required_skills"]),
+        ", ".join(job["nice_to_have"]),
+        job["min_years"],
+        f'<div class="status-line ok">✅ Loaded workspace job “{_html.escape(job["title"])}”.</div>',
+    )
+
+
+def save_workspace_job(job_id, position, company, skills_text, nice_text, min_years,
+                       invite_body, new_job=False):
+    """Create a new job or update the selected one."""
+    if not (position or "").strip():
+        return _workspace_update(
+            '<div class="status-line err">⚠ Enter a position / job title first.</div>',
+            job_id,
+        )
+    try:
+        workspace = _job_workspace()
+        fields = {
+            "title": position,
+            "company": company,
+            "required_skills": _parse_skill_list(skills_text),
+            "nice_to_have": _parse_skill_list(nice_text),
+            "min_years": min_years,
+            "invite_template": invite_body or "",
+        }
+        if job_id and not new_job:
+            job = workspace.update(job_id, **fields)
+            workspace.set_active(job["id"])
+            action = "updated"
+        else:
+            job = workspace.create(**fields)
+            action = "created"
+    except workspace_mod.WorkspaceError as ex:
+        return _workspace_update(
+            f'<div class="status-line err">❌ {_html.escape(str(ex))}</div>', job_id)
+    return _workspace_update(
+        f'<div class="status-line ok">✅ Workspace job “{_html.escape(job["title"])}” '
+        f'{action}.</div>',
+        job["id"],
+    )
+
+
+def delete_workspace_job(job_id):
+    if not job_id:
+        return _workspace_update(
+            '<div class="status-line err">⚠ Select a saved job first.</div>')
+    try:
+        removed = _job_workspace().delete(job_id)
+    except workspace_mod.WorkspaceError as ex:
+        return _workspace_update(f'<div class="status-line err">❌ {_html.escape(str(ex))}</div>')
+    if not removed:
+        return _workspace_update('<div class="status-line err">⚠ That job no longer exists.</div>')
+    return _workspace_update('<div class="status-line info">🗑 Workspace job deleted.</div>')
+
+
+def render_score_cards_from_state(inbox_state):
+    return scorecard.render_score_cards((inbox_state or {}).get("candidates", []))
+
+
+def export_candidates_csv(inbox_state, request: gr.Request = None):
+    """Write the current ranked candidates to a CSV temp file."""
+    if not _authorized(request, "read_resume"):
+        return None, _denied_html("read_resume")
+    candidates = (inbox_state or {}).get("candidates", [])
+    if not candidates:
+        return None, '<div class="status-line err">⚠ Scan the inbox first — no candidates to export.</div>'
+    path = runtime.new_temp_file(suffix=".csv")
+    try:
+        exporters.write_candidates_csv(candidates, path)
+        return path, (f'<div class="status-line ok">✅ Exported {len(candidates)} candidate(s) '
+                      'as CSV.</div>')
+    except Exception as ex:  # noqa: BLE001 - never expose raw exception text
+        return None, f'<div class="status-line err">❌ CSV export failed: {_error_html(ex)}</div>'
+
+
+def _interview_slot_plan(n):
+    """Calendar-aware slots when OAuth is connected, otherwise generic slots."""
+    try:
+        client = calendar_api.CalendarClient()
+        slots = client.find_available_slots(
+            n,
+            slot_minutes=config.INTERVIEW_SLOT_MINUTES,
+        )
+        return [(skills_mod.format_interview_slot(slot), slot) for slot in slots], ""
+    except (calendar_api.CalendarAPIError, google_oauth.OAuthError) as ex:
+        note = (f'Calendar free/busy unavailable ({type(ex).__name__}); '
+                'generic business-hour slots were used.')
+        datetimes = skills_mod.suggest_interview_slot_datetimes(n)
+        return [(skills_mod.format_interview_slot(slot), slot) for slot in datetimes], note
+
+
+def _ics_filename(candidate_name, position):
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", f"interview-{candidate_name}-{position}").strip("-")
+    return (base or "interview")[:80] + ".ics"
 
 
 _APPLICATION_KEYWORDS = [
@@ -642,51 +1121,51 @@ def _find_attachment_name(msg):
     for part in msg.walk():
         cd = part.get("Content-Disposition", "") or ""
         if "attachment" in cd.lower():
-            filename = part.get_filename() or ""
+            filename = os.path.basename(str(part.get_filename() or ""))[:255]
             if filename.lower().endswith((".pdf", ".doc", ".docx", ".rtf", ".txt")):
                 return filename
     return None
 
 
-def _extract_attachment_text(msg):
-    """Return (filename, extracted_text) for the first resume-like attachment, or (None, "")."""
+def _extract_attachment_data(msg):
+    """Return ``(filename, text, hidden_report)`` for the first resume attachment."""
     if not msg.is_multipart():
-        return None, ""
+        return None, "", None
     for part in msg.walk():
         cd = part.get("Content-Disposition", "") or ""
         if "attachment" not in cd.lower():
             continue
-        filename = part.get_filename() or ""
+        filename = os.path.basename(str(part.get_filename() or ""))[:255]
         low = filename.lower()
         if not low.endswith((".pdf", ".docx", ".txt", ".rtf")):
             # legacy binary .doc needs extra libraries; fall back to the email body instead.
             continue
-        payload = part.get_payload(decode=True)
+        payload = _attachment_payload(part)
         if not payload:
             continue
+        hidden = None
         if low.endswith(".docx"):
+            text = _docx_text(payload)
+        elif low.endswith(".pdf"):
+            text = _pdf_text(payload)
             try:
-                with zipfile.ZipFile(BytesIO(payload)) as zf:
-                    xml = zf.read("word/document.xml").decode("utf-8", errors="ignore")
-                xml = re.sub(r"</w:p>", "\n", xml)
-                xml = re.sub(r"<w:tab/>|<w:br/>", " ", xml)
-                text = _html.unescape(re.sub(r"<[^>]+>", "", xml))
-                return filename, text
+                hidden = extractor_mod.detect_hidden_pdf_text(payload)
             except Exception:
-                continue
-        if low.endswith(".pdf"):
-            try:
-                reader = pypdf.PdfReader(BytesIO(payload))
-                text = "\n".join((page.extract_text() or "") for page in reader.pages)
-                return filename, text
-            except Exception:
-                continue
+                hidden = None
         else:
             try:
-                return filename, payload.decode("utf-8", errors="ignore")
+                text = payload.decode("utf-8", errors="ignore")[:config.IMAP_MAX_TEXT_CHARS]
             except Exception:
-                continue
-    return None, ""
+                text = None
+        if text is not None:
+            return filename, text, hidden
+    return None, "", None
+
+
+def _extract_attachment_text(msg):
+    """Return (filename, extracted_text) for the first resume-like attachment."""
+    filename, text, _hidden = _extract_attachment_data(msg)
+    return filename, text
 
 
 def render_application_email_cards(candidates):
@@ -697,7 +1176,15 @@ def render_application_email_cards(candidates):
         att = (f'<span class="attach-chip">📎 {_html.escape(c["_attachment"])}</span>'
                if c.get("_attachment") else "")
         cls, label = REC_CHIP.get(c["recommendation"], ("review", c["recommendation"]))
+        label = _html.escape(str(label))
         body_text = c.get("_body", "") or "(no body content found)"
+        conf = c.get("confidence", c.get("_confidence", 0))
+        mode = _html.escape(str(c.get("extraction_mode", "deterministic")))
+        hint = c.get("memory_hint")
+        hint_html = (f'<div style="margin-top:6px; font-size:0.8rem; color:#c4b5fd;">'
+                     f'🧠 {_html.escape(str(hint))}</div>' if hint else "")
+        review_html = ('<span class="chip review">Human review</span>'
+                       if c.get("needs_human_review") else "")
         cards.append(f"""
         <div class="reply-card">
           <span class="reply-date">{_html.escape(c.get('_date', ''))}</span>
@@ -707,8 +1194,10 @@ def render_application_email_cards(candidates):
           <div class="email-body" style="max-height:260px; overflow-y:auto;">{_html.escape(body_text)}</div>
           <div style="margin-top:10px;">
             <span class="chip {cls}">{label}</span>
-            <span class="match-pct" style="margin-left:8px;">{c['match_percent']}% match</span>
+            <span class="match-pct" style="margin-left:8px;">{c['match_percent']}% match · {conf}% conf · {mode}</span>
+            {review_html}
           </div>
+          {hint_html}
         </div>""")
     return f'<div class="reply-grid">{"".join(cards)}</div>'
 
@@ -973,19 +1462,24 @@ def _draft_invitation(candidate, position, company, recruiter, slot, body_templa
     }
 
 
-def update_trace_table(trace_state):
-    """Update trace table display from trace state."""
-    if not trace_state:
+def _trace_entries(trace_state, run_context):
+    """Return this session's traces; never a process-wide singleton."""
+    if run_context is not None:
         try:
-            traces = tracing.trace_recorder.get_traces()
+            return run_context.trace.get_traces(limit=1000)
         except Exception:
-            traces = []
-    else:
-        traces = trace_state
-    
+            return []
+    return list(trace_state or [])
+
+
+def update_trace_table(trace_state, run_context, request: gr.Request = None):
+    """Update trace table display from this session's trace state."""
+    if request is not None and _identity_from_request(request)[0].role != Role.ADMIN:
+        return []
+    traces = _trace_entries(trace_state, run_context)
     if not traces:
         return []
-    
+
     rows = []
     for t in traces[-50:]:  # Show last 50
         rows.append([
@@ -1000,35 +1494,46 @@ def update_trace_table(trace_state):
     return rows
 
 
-def download_trace_json(trace_state):
-    """Download trace as JSON file."""
+def download_trace_json(trace_state, run_context, request: gr.Request = None):
+    """Download this session's trace as a JSON file (temp file tracked for cleanup)."""
+    if request is not None and _identity_from_request(request)[0].role != Role.ADMIN:
+        return None
+    data = _trace_entries(trace_state, run_context)
+    path = runtime.new_temp_file(suffix=".json")
     try:
-        if trace_state:
-            data = trace_state
+        if run_context is not None:
+            payload = {
+                "run_id": run_context.trace.run_id,
+                "budget": run_context.budget.snapshot(),
+                "traces": data,
+            }
         else:
-            data = tracing.trace_recorder.get_traces(limit=1000)
-        # Write to temp file
-        f = NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
-        json.dump(data, f, indent=2)
-        f.close()
-        return f.name
-    except Exception as e:
-        f = NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
-        json.dump({"error": str(e)}, f, indent=2)
-        f.close()
-        return f.name
+            payload = {"traces": data}
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        return path
+    except Exception as e:  # noqa: BLE001 - never expose raw exception text
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"error": safe_error(e)}, handle, indent=2)
+        except OSError:
+            pass
+        return path
 
 
 def _recommendation_for(match):
     return skills_mod.recommendation_for_score(match)
 
 
-def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text, min_years, limit=60):
-    """Scan the Gmail inbox, parse applications, and score them deterministically.
+def analyze_inbox_applications(position, skills_text, nice_text, min_years,
+                               use_coordinator=False, blind_mode=False,
+                               request: gr.Request = None, limit=60):
+    """Scan Gmail (OAuth) and run every candidate through the Phase 3 blocks.
 
-    Gmail I/O is handled here; resume parsing and scoring use the same
-    evidence-weighted skills as the CLI pipeline. A deterministic path keeps the
-    UI usable without an API key.
+    The LLM is confined to quote-verified extraction. Scoring, review flags,
+    ranking and drafting are deterministic. If the ADK coordinator is enabled
+    and available it runs over the already-quarantined profiles; any failure
+    falls back to deterministic results with a visible banner.
     """
     empty_state = {"title": "", "candidates": []}
     empty_stats = _stats_html_for([])
@@ -1037,76 +1542,178 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
         return (empty_stats, html_msg, render_candidate_table([]), make_score_chart([]),
                 make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, "")
 
+    if not _authorized(request, "read_resume"):
+        return _fail(_denied_html("read_resume"))
     if not (position or "").strip():
         return _fail('<div class="status-line err">⚠ Enter the position you are hiring for.</div>')
     if not _parse_skill_list(skills_text):
         return _fail('<div class="status-line err">⚠ Enter at least one required skill (comma separated).</div>')
-    if not gmail_address or not app_password:
-        return _fail('<div class="status-line err">⚠ Please enter both the Gmail address and the App Password.</div>')
 
     requirements = build_custom_requirements(position, skills_text, nice_text, min_years)
     wanted = requirements["required_skills"] + requirements["nice_to_have"]
+    try:
+        scan_limit = max(1, min(int(limit or 60), config.IMAP_SCAN_LIMIT))
+    except (TypeError, ValueError):
+        scan_limit = min(60, config.IMAP_SCAN_LIMIT)
 
     candidates = []
+    total_found = 0
+    resume_texts = {}
+    validated_profiles = {}
+    hidden_reports = {}
+    coordinator_note = ""
+    gmail_error = ""
+    model_state = phase3_runner.model_status()
+    llm_enabled = bool(model_state.agentic)
+    selected_model = model_state.model or config.get_gemini_model()
+    memory = _candidate_memory()
+    run_ctx = runtime.new_run_context(max_steps=scan_limit * 3 + 15)
     try:
-        imap = imaplib.IMAP4_SSL("imap.gmail.com")
-        imap.login(gmail_address, app_password)
-        imap.select("INBOX")
-        position_words = _position_words(requirements["title"])
-        total_found = 0
-        status, data = imap.search(None, "ALL")
-        ids = data[0].split()[-limit:]
-        for msg_id in reversed(ids):
-            status, msg_data = imap.fetch(msg_id, "(RFC822)")
-            if not msg_data or not msg_data[0]:
-                continue
-            msg = email_lib.message_from_bytes(msg_data[0][1])
-            subject = _decode_mime_header(msg.get("Subject", "") or "")
-            body = _extract_plain_body(msg)
-            attachment_name, attachment_text = _extract_attachment_text(msg)
-            blob = f"{subject} {body}".lower()
-            has_attachment = _find_attachment_name(msg) is not None
-            if not (has_attachment or any(k in blob for k in _APPLICATION_KEYWORDS)):
-                continue
-            total_found += 1
-            # The position itself must actually be mentioned in the email (subject or
-            # body) — e.g. "Software Engineer" applicants only, not every applicant who
-            # happens to share a skill or two with the role.
-            if position_words and not all(w in blob for w in position_words):
-                continue
+        client = _gmail_client()
+        with runtime.QUEUE_GATE.slot(timeout=30):
+            position_words = _position_words(requirements["title"])
+            ids = client.list_message_ids(limit=scan_limit)
+            for msg_id in ids:
+                try:
+                    raw = client.get_raw(msg_id)
+                except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
+                    gmail_error = safe_error(ex)
+                    run_ctx.budget.consume()
+                    continue
+                if not raw:
+                    run_ctx.budget.consume()
+                    continue
+                msg = email_lib.message_from_bytes(raw)
+                subject = _decode_mime_header(msg.get("Subject", "") or "")
+                body = _extract_plain_body(msg)
+                attachment_name, attachment_text, hidden_report = _extract_attachment_data(msg)
+                blob = f"{subject} {body}".lower()
+                has_attachment = _find_attachment_name(msg) is not None
+                if not (has_attachment or any(k in blob for k in _APPLICATION_KEYWORDS)):
+                    run_ctx.budget.consume()
+                    continue
+                total_found += 1
+                # The position itself must actually be mentioned in the email (subject or
+                # body) — e.g. "Software Engineer" applicants only, not every applicant who
+                # happens to share a skill or two with the role.
+                if position_words and not all(w in blob for w in position_words):
+                    run_ctx.budget.consume()
+                    continue
 
-            from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
-            from_name = _decode_mime_header(from_name)
-            resume_text = attachment_text.strip() if attachment_text.strip() else body
-            text_norm = re.sub(r"\s+", " ", resume_text.lower())
+                from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
+                from_name = _decode_mime_header(from_name)
+                resume_text = attachment_text.strip() if attachment_text.strip() else body
+                source_id = (from_addr or f"message-{msg_id}")[:255]
 
-            profile = skills_mod.resume_parser_skill(resume_text, source_id=from_addr or subject)
-            profile["name"] = from_name or (from_addr.split("@")[0] if from_addr else "Unknown Candidate").title()
-            if from_addr:
-                profile["email"] = from_addr
-            # Skills = exactly the ones HR asked for that this resume contains.
-            profile["skills"] = [sk for sk in wanted if _skill_present(sk, text_norm)]
-            profile["experience_years"] = _estimate_experience_years(resume_text)
+                result = phase3_runner.analyze_resume_text(
+                    resume_text,
+                    requirements,
+                    source_id=source_id,
+                    run_context=run_ctx,
+                    memory=memory,
+                    model=selected_model,
+                    llm_enabled=llm_enabled,
+                    hidden_report=hidden_report,
+                    include_profile=True,
+                    blind=bool(blind_mode),
+                    known_names=[from_name] if (blind_mode and from_name) else None,
+                )
+                validated_profile = result.pop("_profile", None)
+                if validated_profile is not None:
+                    validated_profiles[source_id] = validated_profile
+                resume_texts[source_id] = resume_text
+                if hidden_report is not None:
+                    hidden_reports[source_id] = hidden_report
 
-            result = skills_mod.candidate_scorer_skill(profile, requirements)
-            if not requirements["nice_to_have"]:
-                # No nice-to-have list -> drop that 15% component and re-normalise to 100.
-                result["match_percent"] = min(100.0, round(result["match_percent"] / (1 - skills_mod.NICE_TO_HAVE_WEIGHT), 1))
-                result["recommendation"] = _recommendation_for(result["match_percent"])
-            result["email"] = profile["email"]
-            result["skills"] = profile["skills"]
-            result["name"] = profile["name"]
-            result["_min_years"] = requirements["min_years"]
-            result["_subject"] = subject
-            result["_attachment"] = attachment_name
-            result["_body"] = body.strip()
-            result["_date"] = msg.get("Date", "")
-            candidates.append(result)
-        imap.logout()
-    except imaplib.IMAP4.error as ex:
-        return _fail(f'<div class="status-line err">❌ IMAP error: {_html.escape(str(ex))} (check the App Password)</div>')
-    except Exception as ex:
-        return _fail(f'<div class="status-line err">❌ Error: {_html.escape(str(ex))}</div>')
+                if from_name:
+                    result["name"] = from_name
+                if from_addr:
+                    result["email"] = from_addr
+                else:
+                    result["name"] = result.get("name") or "Unknown Candidate"
+                if not requirements["nice_to_have"]:
+                    # No nice-to-have list -> drop that 15% component and re-normalise to 100.
+                    result["match_percent"] = min(
+                        100.0,
+                        round(result["match_percent"] / (1 - skills_mod.NICE_TO_HAVE_WEIGHT), 1),
+                    )
+                    result["recommendation"] = _recommendation_for(result["match_percent"])
+                result["_min_years"] = requirements["min_years"]
+                result["_subject"] = subject
+                result["_attachment"] = attachment_name
+                result["_body"] = body.strip()
+                result["_date"] = msg.get("Date", "")
+                candidates.append(result)
+                run_ctx.trace.record("screener", "scored_application", "gmail",
+                                     input_summary="1 message",
+                                     output_summary=result["recommendation"])
+    except runtime.QueueFullError:
+        return _fail('<div class="status-line err">⚠ The server is busy. Try again shortly.</div>')
+    except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
+        return _fail(f'<div class="status-line err">❌ Gmail: {_error_html(ex)}. '
+                     'Connect Google OAuth in the inbox section above.</div>')
+    except runtime.BudgetExceededError:
+        return _fail('<div class="status-line err">⚠ This scan exceeded the per-run budget.</div>')
+    except Exception as ex:  # noqa: BLE001 - sanitized for display
+        return _fail(f'<div class="status-line err">❌ Error: {_error_html(ex)}</div>')
+
+    if not candidates and gmail_error and not total_found:
+        return _fail(f'<div class="status-line err">❌ Gmail: {_html.escape(gmail_error)}. '
+                     'Check the OAuth connection.</div>')
+
+    if use_coordinator and candidates:
+        if phase3_runner.coordinator_available() and not run_ctx.budget.degraded:
+            try:
+                identity = _identity_from_request(request)[0]
+                coordinator_result = phase3_runner.run_coordinator(
+                    requirements=requirements,
+                    resume_texts=resume_texts,
+                    source_ids=list(resume_texts.keys()),
+                    validated_profiles=validated_profiles,
+                    hidden_reports=hidden_reports,
+                    role=identity.role.value,
+                    model=selected_model,
+                    run_context=run_ctx,
+                    memory=memory,
+                    jd_filename="",
+                )
+                by_source = {c.get("source_id"): c for c in candidates}
+                merged = []
+                for scored in coordinator_result.get("ranked_candidates", []):
+                    base = by_source.get(scored.get("source_id"))
+                    if base is None:
+                        merged.append(scored)
+                        continue
+                    meta = {k: v for k, v in base.items() if k.startswith("_")}
+                    item = {**scored, **meta}
+                    item["name"] = base.get("name", item.get("name"))
+                    item["email"] = base.get("email", item.get("email"))
+                    item["evidence"] = base.get("evidence", item.get("evidence"))
+                    item["_confidence"] = item.get("confidence", item.get("_confidence", 0))
+                    if not requirements["nice_to_have"]:
+                        item["match_percent"] = min(
+                            100.0,
+                            round(item["match_percent"] / (1 - skills_mod.NICE_TO_HAVE_WEIGHT), 1),
+                        )
+                        item["recommendation"] = _recommendation_for(item["match_percent"])
+                    merged.append(item)
+                if merged:
+                    candidates = merged
+                    coordinator_note = (
+                        f"ADK coordinator reviewed {len(merged)} candidate(s) "
+                        f"({coordinator_result.get('run_id', '')[:8]})."
+                    )
+                else:
+                    coordinator_note = "Coordinator returned no usable results; deterministic scoring kept."
+            except Exception as exc:  # noqa: BLE001 - always keep deterministic results
+                coordinator_note = (
+                    f"Coordinator unavailable ({type(exc).__name__}); "
+                    "deterministic Phase 3 results kept."
+                )
+        else:
+            coordinator_note = (
+                "Coordinator not configured; deterministic Phase 3 results kept."
+            )
 
     unrelated_count = total_found - len(candidates)
 
@@ -1135,10 +1742,34 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     req_txt = ", ".join(requirements["required_skills"])
     excluded_note = (f' · {unrelated_count} application(s) for a different role excluded'
                       if unrelated_count else '')
+    review_count = sum(1 for c in candidates if c.get("needs_human_review"))
+    hidden_count = sum(1 for c in candidates if c.get("hidden_text_suspected"))
+    budget_line = phase3_runner.summarize_budget(run_ctx)
+    mode_note = (
+        f"Mode: {model_state.mode} ({_html.escape(model_state.message)})"
+        if model_state.message else f"Mode: {model_state.mode}"
+    )
+    coordinator_html = (
+        f'<div class="status-line info">🤖 {_html.escape(coordinator_note)}</div>'
+        if coordinator_note else ""
+    )
+    blind_html = (
+        '<div class="status-line info">🕶 Blind mode: candidate names and contact '
+        'details were masked before extraction and scoring.</div>'
+        if blind_mode else ""
+    )
+    review_html = (
+        f'<div class="status-line info">🧑‍⚖️ {review_count} candidate(s) need human review · '
+        f'{hidden_count} hidden-text suspect(s).</div>'
+        if (review_count or hidden_count) else ""
+    )
     status = (f'<div class="status-line ok">✅ Found {len(candidates)} relevant application(s), scored for '
               f'“{_html.escape(requirements["title"])}” · required: {_html.escape(req_txt)} · '
               f'min. experience: {requirements["min_years"]} yr(s){excluded_note}</div>'
-              f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}–{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>')
+              f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}–{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>'
+              f'<div class="status-line info">{mode_note}</div>'
+              f'<div class="status-line info">💸 {_html.escape(budget_line)}</div>'
+              f'{blind_html}{coordinator_html}{review_html}')
     state = {"title": requirements["title"], "candidates": candidates}
     return (_stats_html_for(candidates), status, render_candidate_table(candidates),
             make_score_chart(candidates), make_skills_chart(coverage),
@@ -1146,48 +1777,214 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
 
 
 def send_invitations_to_selected(sender_email, sender_name, brevo_api_key, company, invite_mode, invite_body,
-                                 default_text, selected_emails, inbox_state, sent_invitations_state):
-    sent_invitations_state = sent_invitations_state or []
+                                 default_text, selected_emails, inbox_state, sent_invitations_state,
+                                 request: gr.Request = None):
+    """Deprecated direct-send path; now refuses to send without explicit approval."""
+    if not _authorized(request, "send_invitations"):
+        return (_denied_html("send_invitations"), sent_invitations_state or [],
+                render_emails(sent_invitations_state or []))
     if not selected_emails:
-        return ('<div class="status-line err">⚠ Select at least one candidate first (checkboxes above).</div>',
-                sent_invitations_state, render_emails(sent_invitations_state))
+        return ('<div class="status-line err">⚠ Select at least one candidate first.</div>',
+                sent_invitations_state or [], render_emails(sent_invitations_state or []))
+    queue, problem, calendar_note = _stage_selected_drafts(
+        sender_email, sender_name, company, invite_mode, invite_body,
+        default_text, selected_emails, inbox_state)
+    if problem:
+        return (f'<div class="status-line err">⚠ Nothing staged — {_html.escape(problem)}</div>',
+                sent_invitations_state or [], render_emails(sent_invitations_state or []))
+    note_html = (f'<div class="status-line info">📅 {_html.escape(calendar_note)}</div>'
+                 if calendar_note else "")
+    return (f'<div class="status-line info">📝 {len(queue.list())} draft(s) staged with '
+            '.ics calendar attachments. No email was sent; use Preview Invitations for Approval '
+            f'and then Approve &amp; Send.</div>{note_html}',
+            sent_invitations_state or [], render_emails(sent_invitations_state or []))
 
-    # "default" sends the default text (the HR's saved one, else the built-in); "custom" sends the box.
+
+def _stage_selected_drafts(sender_email, sender_name, company, invite_mode, invite_body,
+                           default_text, selected_emails, inbox_state):
+    """Build draft-only invitations and put them in the human approval queue."""
     if invite_mode == "custom":
         template = invite_body
     else:
         template = (default_text or "").strip() or DEFAULT_INVITE_TEMPLATE
     problem = _check_invite_template("custom", template)
     if problem:
-        return (f'<div class="status-line err">⚠ Nothing was sent — {_html.escape(problem)}</div>',
-                sent_invitations_state, render_emails(sent_invitations_state))
-
+        return None, f"your email text has a problem — {problem}", ""
     candidates = (inbox_state or {}).get("candidates", [])
     title = (inbox_state or {}).get("title") or "the role"
     by_email = {c["email"]: c for c in candidates}
-
-    slots = skills_mod.suggest_interview_slots(len(selected_emails))
+    slots, calendar_note = _interview_slot_plan(len(selected_emails))
     drafts = []
     for i, addr in enumerate(selected_emails):
-        c = by_email.get(addr)
-        if not c:
+        candidate = by_email.get(addr)
+        if not candidate:
             continue
-        slot = slots[i] if i < len(slots) else ""
-        drafts.append(_draft_invitation(c, title, company, sender_name, slot, template, sender_email))
-
+        slot_label, slot_start = slots[i] if i < len(slots) else ("", None)
+        draft = _draft_invitation(
+            candidate, title, company, sender_name, slot_label, template, sender_email)
+        if slot_start is not None:
+            draft["ics_content"] = calendar_api.generate_interview_ics(
+                candidate_name=str(candidate.get("name", "") or ""),
+                candidate_email=str(candidate.get("email", "") or ""),
+                position=title,
+                company=str(company or ""),
+                start=slot_start,
+                duration_minutes=config.INTERVIEW_SLOT_MINUTES,
+                location=str(company or ""),
+                description=draft.get("body", ""),
+                organizer_email=str(sender_email or ""),
+                organizer_name=str(sender_name or "HR Team"),
+            )
+            draft["ics_filename"] = _ics_filename(
+                str(candidate.get("name", "") or "candidate"), title)
+        drafts.append(draft)
     if not drafts:
-        return ('<div class="status-line err">⚠ Could not match the selected candidates — try scanning the inbox again.</div>',
-                sent_invitations_state, render_emails(sent_invitations_state))
+        return None, "could not match the selected candidates — scan the inbox again.", ""
 
-    status_html, sent_ok = send_all_emails(sender_email, sender_name, brevo_api_key, drafts)
-    updated_state = sent_invitations_state + sent_ok
-    return status_html, updated_state, render_emails(updated_state)
+    queue = ApprovalQueue()
+    queue.stage_many(drafts)
+    return queue, None, calendar_note
+
+
+def stage_invitations_for_approval(sender_email, sender_name, company, invite_mode,
+                                   invite_body, default_text, selected_emails,
+                                   inbox_state, request: gr.Request = None):
+    """First click: preview drafts. Nothing is sent until explicit approval."""
+    if not _authorized(request, "send_invitations"):
+        return (_denied_html("send_invitations"), [], "")
+    if not selected_emails:
+        return ('<div class="status-line err">⚠ Select at least one candidate first.</div>',
+                [], "")
+    queue, problem, calendar_note = _stage_selected_drafts(
+        sender_email, sender_name, company, invite_mode, invite_body,
+        default_text, selected_emails, inbox_state)
+    if problem:
+        return (f'<div class="status-line err">⚠ Nothing staged — {_html.escape(problem)}</div>',
+                [], "")
+    pending = [item.as_dict() for item in queue.list()]
+    note_html = (f'<div class="status-line info">📅 {_html.escape(calendar_note)}</div>'
+                 if calendar_note else "")
+    status = (f'<div class="status-line info">📝 {len(pending)} draft(s) ready with .ics '
+              'calendar attachments. Review the email content below, then click '
+              '<b>Approve &amp; send</b>. No email has been sent yet.</div>' + note_html)
+    return status, pending, queue.preview_html()
+
+
+def approve_and_send_staged(sender_email, sender_name, brevo_api_key, pending_drafts,
+                            sent_invitations_state, request: gr.Request = None):
+    """Second click: deterministic send of explicitly approved drafts only.
+
+    The UI click is the human approval. Each draft still passes through
+    :func:`src.approval.send_approved_draft`, which refuses anything whose
+    ``approved`` flag is not true; no LLM can reach the mail transport.
+    """
+    if not _authorized(request, "send_invitations"):
+        return (_denied_html("send_invitations"), pending_drafts or [],
+                render_emails(sent_invitations_state or []), "")
+    if not pending_drafts:
+        return ('<div class="status-line err">⚠ No drafts are waiting for approval.</div>',
+                [], render_emails(sent_invitations_state or []), "")
+
+    queue = ApprovalQueue()
+    staged = queue.stage_many(pending_drafts)
+    statuses = []
+    sent_ok = []
+    for item in staged:
+        queue.approve(item.id)
+        try:
+            send_status, sent = send_approved_draft(
+                queue.get(item.id),
+                sender_email=sender_email,
+                sender_name=sender_name,
+                api_key=brevo_api_key,
+                send_func=send_all_emails,
+            )
+            statuses.append(send_status)
+            sent_ok.extend(sent)
+            for draft in sent:
+                _remember_candidate(draft.get("to", ""), "shortlist",
+                                    "interview invitation approved and sent")
+        except ApprovalRequiredError:
+            statuses.append(
+                f'<div class="status-line err">⛔ Refused to send an unapproved draft '
+                f'to {_html.escape(str(item.to))}.</div>'
+            )
+        except Exception as ex:  # noqa: BLE001 - sanitized for display
+            statuses.append(
+                f'<div class="status-line err">❌ Could not send to '
+                f'{_html.escape(str(item.to))}: {_error_html(ex, (brevo_api_key, sender_email))}</div>'
+            )
+
+    updated_state = (sent_invitations_state or []) + sent_ok
+    return ("".join(statuses) or '<div class="status-line err">⚠ Nothing sent.</div>',
+            [], render_emails(updated_state), "")
+
+
+def discard_staged_drafts(pending_drafts, sent_invitations_state,
+                          request: gr.Request = None):
+    if not _authorized(request, "send_invitations"):
+        return _denied_html("send_invitations"), pending_drafts or [], ""
+    return ('<div class="status-line info">Drafts discarded. Nothing was sent.</div>',
+            [], render_emails(sent_invitations_state or []))
+
+
+def forget_candidate_memory(selected_emails, inbox_state, request: gr.Request = None):
+    """Delete HMAC-keyed memory for selected candidates and refresh hints."""
+    if not _authorized(request, "read_resume"):
+        return (_denied_html("read_resume"), inbox_state,
+                render_candidate_table((inbox_state or {}).get("candidates", [])))
+    memory = _candidate_memory()
+    selected = {str(e).strip().lower() for e in (selected_emails or []) if e}
+    if memory is None:
+        return ('<div class="status-line err">⚠ Memory store is unavailable.</div>',
+                inbox_state,
+                render_candidate_table((inbox_state or {}).get("candidates", [])))
+    removed = 0
+    for address in selected:
+        try:
+            removed += 1 if memory.forget_candidate(address) else 0
+        except Exception:
+            continue
+    state = dict(inbox_state) if isinstance(inbox_state, dict) else {"candidates": []}
+    candidates = state.get("candidates", [])
+    for candidate in candidates:
+        if str(candidate.get("email", "")).lower() in selected:
+            candidate["memory_hint"] = None
+    state["candidates"] = candidates
+    return (
+        f'<div class="status-line info">🧠 Forgot {removed} memory record(s); '
+        f'scores were not changed.</div>',
+        state,
+        render_candidate_table(candidates),
+    )
+
+
+def _init_session(request: gr.Request = None):
+    """Create one run context per browser session and gate the dev panel."""
+    run_context = runtime.new_run_context()
+    runtime.cleanup_temp_files()
+    try:
+        record, _manager = _identity_from_request(request)
+    except AccessDeniedError:
+        return run_context, gr.update(visible=False), _denied_html()
+    is_admin = record.role == Role.ADMIN
+    status = phase3_runner.model_status()
+    css_class = "err" if status.degraded else "info"
+    banner = (
+        f'<div class="status-line {css_class}">Signed in as '
+        f'<b>{_html.escape(record.username)}</b> · role: {_html.escape(record.role.value)}'
+        f' · Phase 3: {_html.escape(status.mode)} — {_html.escape(status.message)}</div>'
+        f'<div class="status-line info">Run {run_context.trace.run_id[:8]} · '
+        f'budget {run_context.budget.remaining_calls} LLM call(s) · '
+        f'{run_context.budget.remaining_tokens} token(s) remaining</div>'
+    )
+    return run_context, gr.update(visible=is_admin), banner
 
 
 # --------------------------------------------------------------------------- #
 # Layout
 # --------------------------------------------------------------------------- #
-with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
+with gr.Blocks(title="Smart HR Recruitment") as demo:
     sent_invitations_state = gr.State([])
     # The HR's own default invitation text lives in THEIR browser (localStorage). storage_key and
     # secret must be fixed: left random they change on every server restart (Render sleeps a lot)
@@ -1201,10 +1998,10 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     inbox_state = gr.State({"title": "", "candidates": []})
     pending_drafts_state = gr.State([])
     trace_state = gr.State([])
+    run_context_state = gr.State(None)
     overrides_state = gr.State([])
     replies_action_state = gr.State({"replies_status": {}})
-    replies_action_status = gr.HTML()
-
+    session_banner = gr.HTML()
 
     gr.HTML("""
       <div id="header-wrap">
@@ -1256,26 +2053,38 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
                 value=DEFAULT_INVITE_TEMPLATE, lines=14, interactive=False)
             restore_default_btn = gr.Button("↺ Restore the original default text", size="sm")
 
-    with gr.Accordion("📧 Gmail inbox access — enter YOUR OWN Gmail (used for Applications + Replies tabs, never saved)", open=False):
+    with gr.Accordion("💼 Job workspaces — save and switch between multiple roles", open=False):
         gr.Markdown(
-            "Any HR using this tool enters their own Gmail here at runtime — nothing is stored. "
-            "Needs a **Gmail App Password** (not your normal password): generate one at "
-            "`myaccount.google.com/apppasswords` (requires 2-Step Verification to be ON).\n\n"
-            "⚠ **This must be the exact same email as the Brevo \"Sender email\" below.** Brevo "
-            "delivers candidate replies to that verified sender's inbox — if a different Gmail is "
-            "entered here, Check for Replies will always come back empty, even though the reply "
-            "really did arrive (just in the other inbox)."
+            "Save the role details above as a workspace job, then switch between jobs at any "
+            "time. Workspaces store job configuration only — never candidate data or credentials."
         )
         with gr.Row():
-            gmail_email_in = gr.Textbox(label="Gmail address (same as Brevo sender email below)", placeholder="you@example.com")
-            with gr.Column(scale=1):
-                gmail_app_password_in = gr.Textbox(label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
-                show_gmail_pwd = gr.Checkbox(label="Show Password", value=False)
-        show_gmail_pwd.change(
-            fn=lambda show: gr.update(type="text" if show else "password"),
-            inputs=[show_gmail_pwd],
-            outputs=[gmail_app_password_in],
+            workspace_job_in = gr.Dropdown(label="Saved jobs", choices=[], interactive=True, scale=3)
+            refresh_workspace_btn = gr.Button("↻ Refresh", size="sm", scale=1)
+        with gr.Row():
+            load_workspace_btn = gr.Button("📂 Load selected job", size="sm")
+            save_workspace_btn = gr.Button("💾 Save / update selected", size="sm")
+            save_workspace_new_btn = gr.Button("➕ Save as new job", size="sm")
+            delete_workspace_btn = gr.Button("🗑 Delete selected", size="sm")
+        workspace_status = gr.HTML()
+
+    with gr.Accordion("🔐 Gmail inbox access — Google OAuth (read-only)", open=False):
+        gr.Markdown(
+            "Applications and replies are read through the **Gmail API** with a read-only OAuth "
+            "token. No Gmail App Password is used or stored.\n\n"
+            "**Local:** set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, then click "
+            "**Connect Google account**. **Deployed:** paste a refresh token produced locally and "
+            "save it; it is stored only in the git-ignored data directory."
         )
+        oauth_status = gr.HTML()
+        with gr.Row():
+            connect_oauth_btn = gr.Button("🔗 Connect Google account (local)", variant="primary")
+            check_oauth_btn = gr.Button("✅ Check connection")
+        with gr.Row():
+            oauth_refresh_in = gr.Textbox(
+                label="Refresh token (deployment fallback)", type="password",
+                placeholder="1//...", scale=3)
+            save_oauth_btn = gr.Button("💾 Save refresh token", size="sm", scale=1)
 
     with gr.Accordion("📧 Brevo sender details — used to actually send emails (never saved)", open=False):
         gr.Markdown(
@@ -1305,6 +2114,14 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
                 "other tabs."
             )
             fetch_apps_btn = gr.Button("🔍  Scan Inbox for Candidate Applications", variant="primary")
+            agentic_mode_in = gr.Checkbox(
+                label="Use Phase 3 ADK coordinator (falls back to deterministic if unavailable)",
+                value=bool(config.get_gemini_api_key() and config.get_gemini_model()),
+            )
+            blind_mode_in = gr.Checkbox(
+                label="Blind mode (mask names before extraction and scoring)",
+                value=bool(config.BLIND_MODE_DEFAULT),
+            )
             applications_status = gr.HTML()
             applications_cards_out = gr.HTML()
 
@@ -1313,12 +2130,31 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
                 score_plot = gr.Plot(label="Candidate Match Scores")
                 skills_plot = gr.Plot(label="Required-skill coverage (candidates who have each skill)")
 
+        with gr.Tab("🧾  Score Cards"):
+            gr.Markdown(
+                "Per-candidate explainability: verified evidence quotes and the concrete "
+                "reasons a candidate was **not** shortlisted."
+            )
+            score_cards_out = gr.HTML(
+                '<div class="empty-state">No score cards yet — scan the inbox first.</div>')
+
         with gr.Tab("🏆  Ranked Candidates"):
             table_out = gr.HTML()
             gr.Markdown("**Select candidates to invite for an interview:**")
             candidate_checkbox = gr.CheckboxGroup(choices=[], label="Detected candidates (ranked highest match first)")
-            send_selected_btn = gr.Button("📤  Send Interview Invitation to Selected", variant="primary")
+            with gr.Row():
+                send_selected_btn = gr.Button("📝  Preview Invitations for Approval", variant="primary")
+                forget_memory_btn = gr.Button("🧠  Forget selected candidate memory", size="sm")
             send_selected_status = gr.HTML()
+            pending_drafts_out = gr.HTML()
+            with gr.Row():
+                approve_send_btn = gr.Button("✅  Approve & Send", variant="primary")
+                discard_drafts_btn = gr.Button("🗑  Discard Drafts", variant="secondary")
+            gr.Markdown("**Export:**")
+            with gr.Row():
+                export_csv_btn = gr.Button("⬇  Export candidates as CSV", variant="secondary")
+            csv_status = gr.HTML()
+            csv_download = gr.File(label="Download CSV")
 
         with gr.Tab("✉️  Interview Emails"):
             gr.Markdown(
@@ -1330,11 +2166,17 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
         with gr.Tab("📥  Replies"):
             gr.Markdown("Checks the Gmail inbox above and shows **only the replies to your interview invitations** — the rest of the inbox is ignored.")
             refresh_btn = gr.Button("🔄  Check for Replies", variant="primary")
-            replies_action_status = gr.HTML()
             replies_out = gr.HTML()
+            replies_picker = gr.Dropdown(label="Reply to update", choices=[], interactive=True)
+            with gr.Row():
+                confirm_reply_btn = gr.Button("✅ Confirm", size="sm")
+                reschedule_reply_btn = gr.Button("📅 Reschedule", size="sm")
+                decline_reply_btn = gr.Button("❌ Decline", size="sm")
+            replies_action_status = gr.HTML()
 
-    with gr.Accordion("🔍 Developer Tools (Agent Trace)", open=False):
-        gr.Markdown("View agent execution traces for observability. Hidden by default for normal users.")
+    with gr.Accordion("🔍 Developer Tools (Agent Trace)", open=False,
+                      visible=False) as dev_tools:
+        gr.Markdown("View agent execution traces for observability. Admin role only.")
         trace_table = gr.Dataframe(
             headers=["Agent", "Action", "Tool", "Input Summary", "Output Summary", "Duration (ms)", "Timestamp"],
             interactive=False,
@@ -1345,37 +2187,60 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
             download_trace_btn = gr.Button("Download trace as JSON", variant="primary")
         trace_download = gr.File(label="Download Trace")
 
-    gr.HTML("""
-    <script>
-    function handleReplyAction(email, action, event) {
-        try {
-            if (event && event.preventDefault) event.preventDefault();
-            const statusEl = document.getElementById('replies-action-status');
-            if (statusEl) {
-                statusEl.innerHTML = '<div class="status-line info">Processing...</div>';
-                setTimeout(() => {
-                    if (action === 'confirm') {
-                        statusEl.innerHTML = '<div class="status-line ok">✅ ' + email + ' status updated to <b>Confirmed</b>.</div>';
-                    } else if (action === 'reschedule') {
-                        statusEl.innerHTML = '<div class="status-line info">📅 Reschedule request noted for ' + email + '. Email agent will draft a response.</div>';
-                    } else if (action === 'decline') {
-                        statusEl.innerHTML = '<div class="status-line ok">❌ ' + email + ' marked as <b>Declined</b>.</div>';
-                    }
-                }, 200);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    }
-    </script>
-    """)
-    replies_action_status_html = gr.HTML("", elem_id="replies-action-status")
-
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
-        inputs=[gmail_email_in, gmail_app_password_in, position_in, skills_in, nice_in, min_exp_in],
+        inputs=[position_in, skills_in, nice_in, min_exp_in, agentic_mode_in, blind_mode_in],
         outputs=[stats_out, applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state, applications_cards_out],
     )
+    inbox_state.change(
+        fn=render_score_cards_from_state,
+        inputs=[inbox_state],
+        outputs=[score_cards_out],
+    )
+    export_csv_btn.click(
+        fn=export_candidates_csv,
+        inputs=[inbox_state],
+        outputs=[csv_download, csv_status],
+    )
+
+    refresh_workspace_btn.click(
+        fn=lambda: _workspace_update('<div class="status-line info">↻ Workspace list refreshed.</div>'),
+        inputs=None,
+        outputs=[workspace_job_in, workspace_status],
+    )
+    load_workspace_btn.click(
+        fn=load_workspace_job,
+        inputs=[workspace_job_in],
+        outputs=[position_in, company_in, skills_in, nice_in, min_exp_in, workspace_status],
+    )
+    save_workspace_btn.click(
+        fn=lambda job_id, pos, comp, skills, nice, years, body: save_workspace_job(
+            job_id, pos, comp, skills, nice, years, body, new_job=False),
+        inputs=[workspace_job_in, position_in, company_in, skills_in, nice_in, min_exp_in,
+                invite_body_in],
+        outputs=[workspace_job_in, workspace_status],
+    )
+    save_workspace_new_btn.click(
+        fn=lambda job_id, pos, comp, skills, nice, years, body: save_workspace_job(
+            job_id, pos, comp, skills, nice, years, body, new_job=True),
+        inputs=[workspace_job_in, position_in, company_in, skills_in, nice_in, min_exp_in,
+                invite_body_in],
+        outputs=[workspace_job_in, workspace_status],
+    )
+    delete_workspace_btn.click(
+        fn=delete_workspace_job,
+        inputs=[workspace_job_in],
+        outputs=[workspace_job_in, workspace_status],
+    )
+
+    connect_oauth_btn.click(fn=connect_google_oauth, inputs=None, outputs=[oauth_status])
+    check_oauth_btn.click(fn=lambda: _oauth_status_html(verify=True), inputs=None,
+                          outputs=[oauth_status])
+    save_oauth_btn.click(fn=save_google_refresh_token, inputs=[oauth_refresh_in],
+                         outputs=[oauth_status])
+    demo.load(fn=_oauth_status_html, inputs=None, outputs=[oauth_status])
+    demo.load(fn=lambda: _workspace_update(""), inputs=None,
+              outputs=[workspace_job_in, workspace_status])
 
     reset_body_btn.click(lambda: CUSTOM_INVITE_SAMPLE, inputs=None, outputs=[invite_body_in])
     save_default_btn.click(save_default_text, inputs=[invite_body_in],
@@ -1383,35 +2248,104 @@ with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     restore_default_btn.click(restore_default_text, inputs=None,
                               outputs=[saved_default_state, default_text_box, default_save_status])
     demo.load(load_saved_default, inputs=[saved_default_state], outputs=[default_text_box])
+    demo.load(_init_session, inputs=None,
+              outputs=[run_context_state, dev_tools, session_banner])
     invite_mode_in.change(lambda m: gr.update(visible=(m == "custom")),
                           inputs=[invite_mode_in], outputs=[custom_invite_box])
 
+    forget_memory_btn.click(
+        fn=forget_candidate_memory,
+        inputs=[candidate_checkbox, inbox_state],
+        outputs=[send_selected_status, inbox_state, table_out],
+    )
     send_selected_btn.click(
-        fn=send_invitations_to_selected,
-        inputs=[sender_email_in, sender_name_in, brevo_key_in, company_in, invite_mode_in, invite_body_in, default_text_box, candidate_checkbox, inbox_state, sent_invitations_state],
-        outputs=[send_selected_status, sent_invitations_state, emails_out],
+        fn=stage_invitations_for_approval,
+        inputs=[sender_email_in, sender_name_in, company_in, invite_mode_in, invite_body_in,
+                default_text_box, candidate_checkbox, inbox_state],
+        outputs=[send_selected_status, pending_drafts_state, pending_drafts_out],
+    )
+    approve_send_btn.click(
+        fn=approve_and_send_staged,
+        inputs=[sender_email_in, sender_name_in, brevo_key_in, pending_drafts_state,
+                sent_invitations_state],
+        outputs=[send_selected_status, pending_drafts_state, emails_out, pending_drafts_out],
+    )
+    discard_drafts_btn.click(
+        fn=discard_staged_drafts,
+        inputs=[pending_drafts_state, sent_invitations_state],
+        outputs=[send_selected_status, pending_drafts_state, emails_out],
     )
 
     refresh_btn.click(
-        fn=check_replies,
-        inputs=[gmail_email_in, gmail_app_password_in, sent_invitations_state],
-        outputs=[replies_out],
+        fn=check_replies_ui,
+        inputs=[sent_invitations_state],
+        outputs=[replies_out, replies_picker],
+    )
+    confirm_reply_btn.click(
+        fn=handle_confirm,
+        inputs=[replies_picker, replies_action_state],
+        outputs=[replies_action_status, replies_action_state],
+    )
+    reschedule_reply_btn.click(
+        fn=handle_reschedule,
+        inputs=[replies_picker, replies_action_state],
+        outputs=[replies_action_status, replies_action_state],
+    )
+    decline_reply_btn.click(
+        fn=handle_decline,
+        inputs=[replies_picker, replies_action_state],
+        outputs=[replies_action_status, replies_action_state],
     )
 
     refresh_trace_btn.click(
         fn=update_trace_table,
-        inputs=[trace_state],
+        inputs=[trace_state, run_context_state],
         outputs=[trace_table],
     )
     download_trace_btn.click(
         fn=download_trace_json,
-        inputs=[trace_state],
+        inputs=[trace_state, run_context_state],
         outputs=[trace_download],
     )
-    demo.load(update_trace_table, inputs=[trace_state], outputs=[trace_table])
+    demo.load(update_trace_table, inputs=[trace_state, run_context_state],
+              outputs=[trace_table])
 
     gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
-if __name__ == "__main__":
+
+def _authenticate(username: str, password: str) -> bool:
+    """Gradio login callback backed by PBKDF2 + lockout + audit logging."""
+    manager = auth_mod.get_auth_manager()
+    if not manager.enabled:
+        return True
+    return manager.authenticate(username, password).ok
+
+
+def main() -> None:
+    manager = validate_startup()
     port = int(os.environ.get("PORT", 10000))
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    # Without configured users, the only safe mode is unauthenticated loopback.
+    if manager.enabled:
+        server_name = os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0")
+        auth_arg = _authenticate
+    else:
+        server_name = "127.0.0.1"
+        auth_arg = None
+    demo.queue(
+        max_size=config.QUEUE_MAX_SIZE,
+        default_concurrency_limit=config.QUEUE_CONCURRENCY_LIMIT,
+    )
+    demo.launch(
+        server_name=server_name,
+        server_port=port,
+        auth=auth_arg,
+        auth_message="Smart HR Recruitment — sign in with your HR_USERS account.",
+        max_threads=config.SERVER_MAX_THREADS,
+        state_session_capacity=config.STATE_SESSION_CAPACITY,
+        theme=THEME,
+        css=CSS,
+    )
+
+
+if __name__ == "__main__":
+    main()
