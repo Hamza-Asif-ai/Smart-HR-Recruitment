@@ -2322,29 +2322,13 @@ def _authenticate(username: str, password: str) -> bool:
 
 
 def main() -> None:
-    manager = validate_startup()
-    port = int(os.environ.get("PORT", 10000))
-    # Without configured users, the only safe mode is unauthenticated loopback.
-    if manager.enabled:
-        server_name = os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0")
-        auth_arg = _authenticate
-    else:
-        server_name = "127.0.0.1"
-        auth_arg = None
+    validate_startup()
+    port = int(os.environ.get("PORT", 7860))
     demo.queue(
         max_size=config.QUEUE_MAX_SIZE,
         default_concurrency_limit=config.QUEUE_CONCURRENCY_LIMIT,
     )
-    demo.launch(
-        server_name=server_name,
-        server_port=port,
-        auth=auth_arg,
-        auth_message="Smart HR Recruitment — sign in with your HR_USERS account.",
-        max_threads=config.SERVER_MAX_THREADS,
-        state_session_capacity=config.STATE_SESSION_CAPACITY,
-        theme=THEME,
-        css=CSS,
-    )
+    demo.launch(server_name="0.0.0.0", server_port=port, share=False)
 
 
 if __name__ == "__main__":
