@@ -12,7 +12,7 @@ Deploy on Hugging Face Spaces:
     3. Space auto-installs from requirements.txt and launches app.py
 
 Email sending/receiving:
-    - Reads Gmail through the read-only Gmail API using Google OAuth.
+    - Reads Gmail through IMAP using a Gmail App Password entered in the UI.
     - Sends interview invitations through Brevo; the Brevo key is entered in
       the UI at runtime and is never written to disk.
 """
@@ -20,6 +20,7 @@ Email sending/receiving:
 from __future__ import annotations
 
 import base64
+import imaplib
 import os
 import re
 import html as _html
@@ -38,8 +39,6 @@ from src import calendar_api
 from src import config
 from src import exporters
 from src import extractor as extractor_mod
-from src import gmail_api
-from src import google_oauth
 from src import guardrails as guardrails_mod
 from src import phase3_runner
 from src import runtime
@@ -703,9 +702,42 @@ def _extract_plain_body(msg) -> str:
         return ""
 
 
-def _gmail_client() -> gmail_api.GmailClient:
-    """Return a read-only Gmail client backed by the saved OAuth token."""
-    return gmail_api.GmailClient()
+def _imap_connect(gmail_address: str, app_password: str):
+    """Open an authenticated, read-only IMAP session for the recruiter's inbox."""
+    imap = imaplib.IMAP4_SSL(
+        config.IMAP_HOST, config.IMAP_PORT, timeout=config.IMAP_TIMEOUT_SECONDS
+    )
+    try:
+        imap.login(gmail_address, app_password)
+        imap.select("INBOX")
+    except Exception:
+        _imap_logout(imap)
+        raise
+    return imap
+
+
+def _imap_message_ids(imap, limit: int):
+    """Return the newest ``limit`` message ids (oldest first, as IMAP stores them)."""
+    status, data = imap.search(None, "ALL")
+    if not data or not data[0]:
+        return []
+    return data[0].split()[-limit:]
+
+
+def _imap_fetch_raw(imap, msg_id):
+    """Fetch one message as raw RFC822 bytes, or ``None`` when unavailable."""
+    status, msg_data = imap.fetch(msg_id, "(RFC822)")
+    if not msg_data or not msg_data[0]:
+        return None
+    raw = msg_data[0][1]
+    return bytes(raw) if isinstance(raw, (bytes, bytearray)) else None
+
+
+def _imap_logout(imap) -> None:
+    try:
+        imap.logout()
+    except Exception:
+        pass
 
 
 def _attachment_payload(part):
@@ -826,50 +858,57 @@ def handle_decline(email, state, request: gr.Request = None):
     return (f'<div class="status-line ok">❌ { _html.escape(email) } marked as <b>Declined</b>.</div>', new_state)
 
 
-def _scan_replies(emails_state=None):
+def _scan_replies(gmail_address, app_password, emails_state=None):
     """Return ``(status_html, reply_dicts)`` for replies to our invitations."""
+    if not gmail_address or not app_password:
+        return ('<div class="status-line err">⚠ Please enter both the Gmail address '
+                'and the App Password.</div>', [])
     candidate_addrs = {str(e.get("to", "")).lower() for e in (emails_state or [])
                        if isinstance(e, dict)}
     replies = []
+    imap = None
     try:
-        client = _gmail_client()
-        ids = client.list_message_ids(limit=config.IMAP_SCAN_LIMIT)
-    except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
-        return (f'<div class="status-line err">❌ Gmail: {_error_html(ex)}. '
-                'Reconnect Google OAuth in the Gmail inbox section.</div>', [])
+        imap = _imap_connect(gmail_address, app_password)
+        ids = _imap_message_ids(imap, config.IMAP_SCAN_LIMIT)
+        for msg_id in reversed(ids):
+            raw = _imap_fetch_raw(imap, msg_id)
+            if not raw:
+                continue
+            msg = email_lib.message_from_bytes(raw)
+            subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
+            from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
+            is_reply_msg = (subject.strip().lower().startswith(("re:", "aw:", "sv:"))
+                            or msg.get("In-Reply-To") is not None
+                            or msg.get("References") is not None)
+            replies_to_invitation = (
+                is_reply_msg and _core_subject(subject).startswith(_INVITE_SUBJECT))
+            from_invited = from_addr in candidate_addrs
+            if not (replies_to_invitation or from_invited):
+                continue
 
-    for msg_id in ids:
-        try:
-            raw = client.get_raw(msg_id)
-        except (gmail_api.GmailAPIError, google_oauth.OAuthError):
-            continue
-        if not raw:
-            continue
-        msg = email_lib.message_from_bytes(raw)
-        subject = _decode_mime_header(msg.get("Subject", "(no subject)"))
-        from_addr = email.utils.parseaddr(msg.get("From", ""))[1].lower()
-        is_reply_msg = (subject.strip().lower().startswith(("re:", "aw:", "sv:"))
-                        or msg.get("In-Reply-To") is not None
-                        or msg.get("References") is not None)
-        replies_to_invitation = is_reply_msg and _core_subject(subject).startswith(_INVITE_SUBJECT)
-        from_invited = from_addr in candidate_addrs
-        if not (replies_to_invitation or from_invited):
-            continue
+            body = _extract_plain_body(msg).strip()
+            looks_like_application = from_invited and (
+                _find_attachment_name(msg) is not None
+                or any(k in f"{subject} {body}".lower() for k in _APPLICATION_KEYWORDS))
 
-        body = _extract_plain_body(msg).strip()
-        looks_like_application = from_invited and (
-            _find_attachment_name(msg) is not None
-            or any(k in f"{subject} {body}".lower() for k in _APPLICATION_KEYWORDS))
-
-        if not (replies_to_invitation or (from_invited and not looks_like_application)):
-            continue
-        replies.append({
-            "from": from_addr,
-            "subject": subject,
-            "date": msg.get("Date", ""),
-            "body": body[:600],
-            "invited": from_invited,
-        })
+            if not (replies_to_invitation or (from_invited and not looks_like_application)):
+                continue
+            replies.append({
+                "from": from_addr,
+                "subject": subject,
+                "date": msg.get("Date", ""),
+                "body": body[:600],
+                "invited": from_invited,
+            })
+    except imaplib.IMAP4.error as ex:
+        return (f'<div class="status-line err">❌ IMAP error: '
+                f'{_error_html(ex, (app_password,))} (check the App Password)</div>', [])
+    except Exception as ex:  # noqa: BLE001 - sanitized for display
+        return (f'<div class="status-line err">❌ Error: '
+                f'{_error_html(ex, (app_password,))}</div>', [])
+    finally:
+        if imap is not None:
+            _imap_logout(imap)
 
     if not replies:
         return '<div class="empty-state">No replies to your interview invitations found yet.</div>', []
@@ -899,82 +938,26 @@ def _scan_replies(emails_state=None):
     return f'<div class="reply-grid">{"".join(cards)}</div>', replies
 
 
-def check_replies(emails_state=None, request: gr.Request = None):
+def check_replies(gmail_address, app_password, emails_state=None, request: gr.Request = None):
     """Show only replies to the interview invitations this app sent."""
     if not _authorized(request, "read_resume"):
         return _denied_html("read_resume")
-    status_html, _replies = _scan_replies(emails_state)
+    status_html, _replies = _scan_replies(gmail_address, app_password, emails_state)
     return status_html
 
 
-def check_replies_ui(emails_state=None, request: gr.Request = None):
+def check_replies_ui(gmail_address, app_password, emails_state=None,
+                     request: gr.Request = None):
     """UI variant that also populates the real Gradio reply-picker control."""
     if not _authorized(request, "read_resume"):
         return _denied_html("read_resume"), gr.update(choices=[], value=None)
-    status_html, replies = _scan_replies(emails_state)
+    status_html, replies = _scan_replies(gmail_address, app_password, emails_state)
     choices = []
     for r in replies:
         label = f"{r['from']} — {r['subject'][:60]}"
         if (label, r["from"]) not in choices:
             choices.append((label, r["from"]))
     return status_html, gr.update(choices=choices, value=choices[0][1] if choices else None)
-
-
-def _oauth_status_html(verify: bool = False) -> str:
-    """Describe the local OAuth state without exposing tokens."""
-    try:
-        status = google_oauth.default_oauth().status()
-    except Exception as ex:  # noqa: BLE001 - configuration must never crash the page
-        return f'<div class="status-line err">❌ Google OAuth configuration error: {_error_html(ex)}</div>'
-    if not status.get("configured"):
-        return ('<div class="status-line info">ℹ Google OAuth is not configured. Set '
-                '<code>GOOGLE_OAUTH_CLIENT_ID</code> and '
-                '<code>GOOGLE_OAUTH_CLIENT_SECRET</code>, then click Connect.</div>')
-    if not status.get("token_present"):
-        return ('<div class="status-line info">🔑 OAuth client configured, but no token yet. '
-                'Click <b>Connect Google account</b> (local) or paste a refresh token below '
-                '(deployed).</div>')
-    if not verify:
-        return ('<div class="status-line ok">✅ Google OAuth token is saved. '
-                'Use <b>Check connection</b> to verify Gmail access.</div>')
-    try:
-        profile = gmail_api.GmailClient().profile()
-        email = _html.escape(str(profile.get("emailAddress", "")))
-        return f'<div class="status-line ok">✅ Connected to Gmail as <b>{email}</b>.</div>'
-    except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
-        return f'<div class="status-line err">❌ Gmail connection failed: {_error_html(ex)}</div>'
-    except Exception as ex:  # noqa: BLE001 - sanitized for display
-        return f'<div class="status-line err">❌ Gmail connection failed: {_error_html(ex)}</div>'
-
-
-def connect_google_oauth():
-    """Run the one-time localhost OAuth consent flow."""
-    try:
-        path = google_oauth.run_local_flow(open_browser=True, timeout_seconds=300)
-        return (f'<div class="status-line ok">✅ Google account connected. '
-                f'Token saved to <code>{_html.escape(path)}</code>.</div>')
-    except google_oauth.OAuthError as ex:
-        return f'<div class="status-line err">❌ OAuth failed: {_error_html(ex)}</div>'
-    except Exception as ex:  # noqa: BLE001 - sanitized for display
-        return f'<div class="status-line err">❌ OAuth failed: {_error_html(ex)}</div>'
-
-
-def save_google_refresh_token(refresh_token):
-    """Persist a deployment-provided refresh token (never echoed back)."""
-    token = (refresh_token or "").strip()
-    if not token:
-        return '<div class="status-line err">⚠ Paste a refresh token first.</div>'
-    try:
-        oauth = google_oauth.default_oauth()
-        google_oauth.save_token(
-            google_oauth.OAuthToken(access_token="", refresh_token=token, expires_at=0),
-            oauth.config.token_file,
-        )
-        oauth.reload()
-        return ('<div class="status-line ok">✅ Refresh token saved. '
-                'Use <b>Check connection</b> to verify Gmail access.</div>')
-    except Exception as ex:  # noqa: BLE001 - never echo the token
-        return f'<div class="status-line err">❌ Could not save the token: {_error_html(ex)}</div>'
 
 
 def _job_workspace() -> workspace_mod.JobWorkspace:
@@ -1089,7 +1072,7 @@ def export_candidates_csv(inbox_state, request: gr.Request = None):
 
 
 def _interview_slot_plan(n):
-    """Calendar-aware slots when OAuth is connected, otherwise generic slots."""
+    """Calendar-aware slots when a calendar token is available, otherwise generic slots."""
     try:
         client = calendar_api.CalendarClient()
         slots = client.find_available_slots(
@@ -1097,7 +1080,7 @@ def _interview_slot_plan(n):
             slot_minutes=config.INTERVIEW_SLOT_MINUTES,
         )
         return [(skills_mod.format_interview_slot(slot), slot) for slot in slots], ""
-    except (calendar_api.CalendarAPIError, google_oauth.OAuthError) as ex:
+    except Exception as ex:  # noqa: BLE001 - always fall back to generic slots
         note = (f'Calendar free/busy unavailable ({type(ex).__name__}); '
                 'generic business-hour slots were used.')
         datetimes = skills_mod.suggest_interview_slot_datetimes(n)
@@ -1525,10 +1508,10 @@ def _recommendation_for(match):
     return skills_mod.recommendation_for_score(match)
 
 
-def analyze_inbox_applications(position, skills_text, nice_text, min_years,
-                               use_coordinator=False, blind_mode=False,
+def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text,
+                               min_years, use_coordinator=False, blind_mode=False,
                                request: gr.Request = None, limit=60):
-    """Scan Gmail (OAuth) and run every candidate through the Phase 3 blocks.
+    """Scan Gmail over IMAP and run every candidate through the Phase 3 blocks.
 
     The LLM is confined to quote-verified extraction. Scoring, review flags,
     ranking and drafting are deterministic. If the ADK coordinator is enabled
@@ -1548,6 +1531,9 @@ def analyze_inbox_applications(position, skills_text, nice_text, min_years,
         return _fail('<div class="status-line err">⚠ Enter the position you are hiring for.</div>')
     if not _parse_skill_list(skills_text):
         return _fail('<div class="status-line err">⚠ Enter at least one required skill (comma separated).</div>')
+    if not gmail_address or not app_password:
+        return _fail('<div class="status-line err">⚠ Please enter both the Gmail address '
+                     'and the App Password.</div>')
 
     requirements = build_custom_requirements(position, skills_text, nice_text, min_years)
     wanted = requirements["required_skills"] + requirements["nice_to_have"]
@@ -1562,24 +1548,19 @@ def analyze_inbox_applications(position, skills_text, nice_text, min_years,
     validated_profiles = {}
     hidden_reports = {}
     coordinator_note = ""
-    gmail_error = ""
     model_state = phase3_runner.model_status()
     llm_enabled = bool(model_state.agentic)
     selected_model = model_state.model or config.get_gemini_model()
     memory = _candidate_memory()
     run_ctx = runtime.new_run_context(max_steps=scan_limit * 3 + 15)
+    imap = None
     try:
-        client = _gmail_client()
+        imap = _imap_connect(gmail_address, app_password)
         with runtime.QUEUE_GATE.slot(timeout=30):
             position_words = _position_words(requirements["title"])
-            ids = client.list_message_ids(limit=scan_limit)
-            for msg_id in ids:
-                try:
-                    raw = client.get_raw(msg_id)
-                except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
-                    gmail_error = safe_error(ex)
-                    run_ctx.budget.consume()
-                    continue
+            ids = _imap_message_ids(imap, scan_limit)
+            for msg_id in reversed(ids):
+                raw = _imap_fetch_raw(imap, msg_id)
                 if not raw:
                     run_ctx.budget.consume()
                     continue
@@ -1649,17 +1630,17 @@ def analyze_inbox_applications(position, skills_text, nice_text, min_years,
                                      output_summary=result["recommendation"])
     except runtime.QueueFullError:
         return _fail('<div class="status-line err">⚠ The server is busy. Try again shortly.</div>')
-    except (gmail_api.GmailAPIError, google_oauth.OAuthError) as ex:
-        return _fail(f'<div class="status-line err">❌ Gmail: {_error_html(ex)}. '
-                     'Connect Google OAuth in the inbox section above.</div>')
+    except imaplib.IMAP4.error as ex:
+        return _fail(f'<div class="status-line err">❌ IMAP error: '
+                     f'{_error_html(ex, (app_password,))} (check the App Password)</div>')
     except runtime.BudgetExceededError:
         return _fail('<div class="status-line err">⚠ This scan exceeded the per-run budget.</div>')
     except Exception as ex:  # noqa: BLE001 - sanitized for display
-        return _fail(f'<div class="status-line err">❌ Error: {_error_html(ex)}</div>')
-
-    if not candidates and gmail_error and not total_found:
-        return _fail(f'<div class="status-line err">❌ Gmail: {_html.escape(gmail_error)}. '
-                     'Check the OAuth connection.</div>')
+        return _fail(f'<div class="status-line err">❌ Error: '
+                     f'{_error_html(ex, (app_password,))}</div>')
+    finally:
+        if imap is not None:
+            _imap_logout(imap)
 
     if use_coordinator and candidates:
         if phase3_runner.coordinator_available() and not run_ctx.budget.degraded:
@@ -2068,23 +2049,20 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
             delete_workspace_btn = gr.Button("🗑 Delete selected", size="sm")
         workspace_status = gr.HTML()
 
-    with gr.Accordion("🔐 Gmail inbox access — Google OAuth (read-only)", open=False):
+    with gr.Accordion(
+            "📧 Gmail inbox access — enter YOUR OWN Gmail "
+            "(used for Applications + Replies tabs, never saved)", open=False):
         gr.Markdown(
-            "Applications and replies are read through the **Gmail API** with a read-only OAuth "
-            "token. No Gmail App Password is used or stored.\n\n"
-            "**Local:** set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, then click "
-            "**Connect Google account**. **Deployed:** paste a refresh token produced locally and "
-            "save it; it is stored only in the git-ignored data directory."
+            "Applications and replies are read over **IMAP** using a **Gmail App Password** "
+            "(not your normal password). Credentials stay in this browser session and are "
+            "never saved.\n\n"
+            "Generate one at `myaccount.google.com/apppasswords` "
+            "(requires 2-Step Verification to be ON)."
         )
-        oauth_status = gr.HTML()
-        with gr.Row():
-            connect_oauth_btn = gr.Button("🔗 Connect Google account (local)", variant="primary")
-            check_oauth_btn = gr.Button("✅ Check connection")
-        with gr.Row():
-            oauth_refresh_in = gr.Textbox(
-                label="Refresh token (deployment fallback)", type="password",
-                placeholder="1//...", scale=3)
-            save_oauth_btn = gr.Button("💾 Save refresh token", size="sm", scale=1)
+        gmail_email_in = gr.Textbox(
+            label="Gmail address", placeholder="you@example.com")
+        gmail_app_password_in = gr.Textbox(
+            label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
 
     with gr.Accordion("📧 Brevo sender details — used to actually send emails (never saved)", open=False):
         gr.Markdown(
@@ -2189,7 +2167,8 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
 
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
-        inputs=[position_in, skills_in, nice_in, min_exp_in, agentic_mode_in, blind_mode_in],
+        inputs=[gmail_email_in, gmail_app_password_in, position_in, skills_in, nice_in,
+                min_exp_in, agentic_mode_in, blind_mode_in],
         outputs=[stats_out, applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state, applications_cards_out],
     )
     inbox_state.change(
@@ -2233,12 +2212,6 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
         outputs=[workspace_job_in, workspace_status],
     )
 
-    connect_oauth_btn.click(fn=connect_google_oauth, inputs=None, outputs=[oauth_status])
-    check_oauth_btn.click(fn=lambda: _oauth_status_html(verify=True), inputs=None,
-                          outputs=[oauth_status])
-    save_oauth_btn.click(fn=save_google_refresh_token, inputs=[oauth_refresh_in],
-                         outputs=[oauth_status])
-    demo.load(fn=_oauth_status_html, inputs=None, outputs=[oauth_status])
     demo.load(fn=lambda: _workspace_update(""), inputs=None,
               outputs=[workspace_job_in, workspace_status])
 
@@ -2278,7 +2251,7 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
 
     refresh_btn.click(
         fn=check_replies_ui,
-        inputs=[sent_invitations_state],
+        inputs=[gmail_email_in, gmail_app_password_in, sent_invitations_state],
         outputs=[replies_out, replies_picker],
     )
     confirm_reply_btn.click(

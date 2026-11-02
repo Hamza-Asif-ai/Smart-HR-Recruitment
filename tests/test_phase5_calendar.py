@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -152,23 +150,3 @@ def test_ics_uid_changes_between_calls_by_default():
     assert first != second
     expected = "fixed@example.com"
     assert expected in calendar_api.generate_interview_ics(uid=expected, **kwargs)
-
-
-def test_pkce_challenge_matches_verifier():
-    from urllib.parse import parse_qs, urlparse
-
-    from src import google_oauth
-
-    cfg = google_oauth.OAuthConfig(
-        client_id="client-id",
-        client_secret="client-secret",
-        redirect_uri="http://localhost:8080/oauth2callback",
-    )
-    url, state, verifier = google_oauth.build_authorization_url(cfg)
-    params = parse_qs(urlparse(url).query)
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode("ascii")).digest()
-    ).rstrip(b"=").decode("ascii")
-    assert params["state"] == [state]
-    assert params["code_challenge"] == [challenge]
-    assert params["code_challenge_method"] == ["S256"]
