@@ -23,6 +23,7 @@ import base64
 import imaplib
 import os
 import re
+from pathlib import Path
 import html as _html
 import email as email_lib
 import email.utils
@@ -176,182 +177,16 @@ THEME = gr.themes.Soft(
     input_border_color="#2a2a3d",
 )
 
-CSS = """
-.gradio-container {max-width: 100% !important; width: 100% !important; margin: 0 !important;
-                    padding-left: 28px !important; padding-right: 28px !important; box-sizing: border-box;}
-
-/* ---------- Header ---------- */
-#header-wrap {display:flex; align-items:center; justify-content:center; gap:14px;
-              padding: 18px 0 6px 0;}
-#logo-badge {width:46px; height:46px; border-radius:13px; flex-shrink:0;
-             background: linear-gradient(140deg,#6366f1,#c084fc);
-             display:flex; align-items:center; justify-content:center;
-             font-weight:800; color:white; font-size:1.05rem; letter-spacing:-0.5px;
-             box-shadow: 0 6px 18px rgba(139,92,246,0.45);}
-#header-text h1 {font-size: 1.85rem; font-weight: 800; margin:0; line-height:1.15;
-            background: linear-gradient(90deg,#a5b4fc,#e9d5ff);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;}
-#header-text p {color: #8b8ba7; font-size: 0.88rem; margin:2px 0 0 0;}
-#badges {display:flex; gap:8px; justify-content:center; margin: 10px 0 4px 0; flex-wrap:wrap;}
-.pill {font-size:0.72rem; padding:4px 11px; border-radius:999px; color:#c4b5fd;
-       background: rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.3);
-       letter-spacing:.02em;}
-
-/* ---------- Stat cards ---------- */
-.stat-card {border-radius: 16px; padding: 20px 14px; text-align:center;
-            border: 1px solid #26263a;
-            background: linear-gradient(165deg, rgba(99,102,241,0.14), rgba(168,85,247,0.04));}
-.stat-card .num {font-size: 2rem; font-weight: 800; color: #ede9fe; line-height:1;}
-.stat-card .lbl {font-size: 0.72rem; color: #9694b5; margin-top: 6px;
-                  letter-spacing:.08em; text-transform:uppercase;}
-
-/* ---------- Tabs ---------- */
-.tabs .tab-nav {border-bottom: 1px solid #232336 !important; gap: 6px;}
-.tabs .tab-nav button {border-radius: 10px 10px 0 0 !important; font-weight:600 !important;
-                        color:#9694b5 !important; border:none !important;
-                        padding: 10px 18px !important; background:transparent !important;}
-.tabs .tab-nav button.selected {color:#e9d5ff !important;
-                        background: linear-gradient(180deg, rgba(139,92,246,0.18), transparent) !important;
-                        box-shadow: inset 0 -2px 0 #a855f7 !important;}
-
-/* ---------- Candidate table ---------- */
-.cand-table-wrap {max-height: 560px; overflow-y: auto; border-radius:14px;
-                   border:1px solid #232336;}
-table.cand-table {width:100%; border-collapse: collapse; font-size:0.86rem;}
-table.cand-table thead th {position:sticky; top:0; background:#181826; color:#9694b5;
-                            text-align:left; padding:11px 14px; font-weight:600;
-                            font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase;
-                            border-bottom:1px solid #2a2a3d; z-index:1;}
-table.cand-table td {padding:11px 14px; border-bottom:1px solid #1d1d2c; color:#dcdce8;
-                      vertical-align:middle;}
-table.cand-table tr:hover td {background:#181826;}
-.rank-badge {display:inline-flex; align-items:center; justify-content:center;
-             width:26px; height:26px; border-radius:8px; font-weight:700; font-size:0.78rem;
-             background:#232336; color:#c4b5fd;}
-.rank-badge.top {background: linear-gradient(140deg,#6366f1,#c084fc); color:white;}
-.cand-name {font-weight:600; color:#f1f1f8;}
-.cand-email {color:#8b8ba7; font-size:0.78rem;}
-.match-cell {display:flex; align-items:center; gap:8px; min-width:120px;}
-.match-bar-bg {flex:1; height:6px; border-radius:4px; background:#232336; overflow:hidden;}
-.match-bar-fill {height:100%; border-radius:4px; background: linear-gradient(90deg,#6366f1,#c084fc);}
-.match-pct {font-weight:700; font-size:0.8rem; color:#e9d5ff; width:38px; text-align:right;}
-.chip {display:inline-block; padding:4px 10px; border-radius:999px; font-size:0.72rem; font-weight:600;}
-.chip.shortlist {background:rgba(34,197,94,0.14); color:#4ade80; border:1px solid rgba(74,222,128,0.3);}
-.chip.review {background:rgba(245,158,11,0.14); color:#fbbf24; border:1px solid rgba(251,191,36,0.3);}
-.chip.reject {background:rgba(244,63,94,0.12); color:#fb7185; border:1px solid rgba(251,113,133,0.3);}
-
-/* ---------- Email cards ---------- */
-.email-card {border:1px solid #232336; border-radius:14px; padding:16px 18px; margin-bottom:12px;
-             background:#12121c;}
-.email-top {display:flex; align-items:center; gap:12px; margin-bottom:10px;}
-.email-avatar {width:36px; height:36px; border-radius:50%; flex-shrink:0;
-                background: linear-gradient(140deg,#6366f1,#c084fc); color:white;
-                display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.85rem;}
-.email-to {font-weight:600; color:#f1f1f8; font-size:0.88rem;}
-.email-addr {color:#8b8ba7; font-size:0.76rem;}
-.email-subject {color:#c4b5fd; font-weight:600; font-size:0.85rem; margin: 8px 0 8px 0;}
-.email-body {color:#b7b7cc; font-size:0.84rem; line-height:1.6; white-space:pre-wrap;
-             border-left: 2px solid #2a2a3d; padding-left:12px;}
-.empty-state {text-align:center; color:#8b8ba7; padding: 40px 0; font-size:0.9rem;}
-
-/* ---------- Status log ---------- */
-.status-line {padding:8px 12px; border-radius:8px; font-size:0.82rem; margin-bottom:6px;
-              font-family: ui-monospace, monospace;}
-.status-line.ok {background:rgba(34,197,94,0.1); color:#4ade80;}
-.status-line.err {background:rgba(244,63,94,0.1); color:#fb7185;}
-.status-line.info {background:rgba(99,102,241,0.1); color:#a5b4fc;}
-
-/* ---------- Reply cards ---------- */
-.reply-card {border:1px solid #232336; border-radius:14px; padding:16px 18px;
-             background:#12121c; border-left:3px solid #4ade80;}
-.reply-date {color:#8b8ba7; font-size:0.74rem; float:right;}
-.reply-grid {display:grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-             gap:14px; align-items:start;}
-.attach-chip {display:inline-block; padding:3px 9px; border-radius:999px; font-size:0.7rem;
-              font-weight:600; background:rgba(99,102,241,0.14); color:#a5b4fc;
-              border:1px solid rgba(99,102,241,0.3); margin-left:6px;}
-.skills-row {display:flex; flex-wrap:wrap; gap:5px; max-width:430px;}
-.skill-chip {font-size:0.68rem; padding:2px 8px; border-radius:999px;
-             background:rgba(139,92,246,0.12); color:#c4b5fd; border:1px solid rgba(139,92,246,0.25);}
-.skill-chip.missing {background:rgba(244,63,94,0.08); color:#fca5a5; border-color:rgba(251,113,133,0.2);}
-
-/* ---------- Candidate score cards ---------- */
-.score-card-grid {display:grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-                  gap:16px; align-items:start;}
-.score-card {border:1px solid #26263a; border-radius:16px; padding:18px;
-             background: linear-gradient(165deg, rgba(99,102,241,0.10), rgba(18,18,28,0.96));}
-.score-card-head {display:flex; align-items:flex-start; justify-content:space-between; gap:12px;}
-.score-card-name {font-weight:700; color:#f1f1f8; font-size:1rem;}
-.score-card-score {text-align:right; flex-shrink:0;}
-.score-card-score .match-pct {font-size:1.2rem; width:auto;}
-.score-card-meta {color:#8b8ba7; font-size:0.75rem; margin:8px 0 12px 0;}
-.score-card-section-title {color:#9694b5; font-size:0.7rem; letter-spacing:.08em;
-                           text-transform:uppercase; font-weight:700; margin:14px 0 7px 0;}
-.score-quote {border-left:2px solid #6366f1; background:rgba(99,102,241,0.07);
-              border-radius:0 8px 8px 0; padding:8px 11px; margin-bottom:7px;}
-.score-quote-label {color:#a5b4fc; font-size:0.7rem; font-weight:700; text-transform:uppercase;
-                    letter-spacing:.04em;}
-.score-quote-text {color:#dcdce8; font-size:0.82rem; line-height:1.45; margin-top:2px;}
-.why-not {margin-top:14px; border:1px solid rgba(251,113,133,0.25); border-radius:10px;
-          background:rgba(244,63,94,0.06); padding:10px 12px;}
-.why-not-title {color:#fca5a5; font-size:0.74rem; font-weight:700; text-transform:uppercase;
-                letter-spacing:.05em; margin-bottom:5px;}
-.why-not ul {margin:0; padding-left:18px; color:#fecdd3; font-size:0.8rem; line-height:1.5;}
+_UI_DIR = Path(__file__).resolve().parent / "ui"
 
 
-/* ---------- Creator credit ---------- */
-.credit-line {display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;
-              margin: 6px 0 2px 0; color:#8b8ba7; font-size:0.82rem;}
-.credit-line b {color:#e9d5ff; font-weight:700;}
-.social-pill {display:inline-flex; align-items:center; gap:7px; padding:5px 12px; border-radius:999px;
-              font-size:0.78rem; font-weight:600; text-decoration:none !important; color:#e4e4f0 !important;
-              background:#181826; border:1px solid #2f2f47; transition: all .18s ease;}
-.social-pill svg {width:15px; height:15px; fill:currentColor;}
-.social-pill:hover {transform: translateY(-1px); color:#ffffff !important;}
-.social-pill.li:hover {background:#0a66c2; border-color:#0a66c2; box-shadow:0 4px 14px rgba(10,102,194,.45);}
-.social-pill.gh:hover {background:#2b2b3f; border-color:#a855f7; box-shadow:0 4px 14px rgba(168,85,247,.35);}
-#credit-footer {text-align:center; padding:22px 0 10px 0; margin-top:14px; border-top:1px solid #232336;}
+def _read_ui(name: str) -> str:
+    return (_UI_DIR / name).read_text(encoding="utf-8")
 
-footer {display:none !important;}
 
-/* ---------- Kill Chrome's white autofill background on inputs ---------- */
-input:-webkit-autofill,
-input:-webkit-autofill:hover,
-input:-webkit-autofill:focus,
-input:-webkit-autofill:active {
-  -webkit-box-shadow: 0 0 0 1000px #1a1a29 inset !important;
-  box-shadow: 0 0 0 1000px #1a1a29 inset !important;
-  -webkit-text-fill-color: #e4e4f0 !important;
-  caret-color: #e4e4f0 !important;
-  transition: background-color 9999s ease-in-out 0s;
-}
-
-/* ---------- Credit footer ---------- */
-#credit-footer {text-align:center; padding: 28px 0 14px 0; margin-top: 10px;
-                border-top: 1px solid #1d1d2c;}
-#credit-footer .made-by {color:#8b8ba7; font-size:0.82rem; margin-bottom:8px;}
-#credit-footer .made-by b {color:#c4b5fd; font-weight:600;}
-#credit-footer .credit-links {display:flex; gap:10px; justify-content:center;}
-#credit-footer .credit-links a {font-size:0.78rem; padding:6px 16px; border-radius:999px;
-       color:#c4b5fd; background: rgba(139,92,246,0.1); border:1px solid rgba(139,92,246,0.28);
-       text-decoration:none; transition: background 0.15s;}
-#credit-footer .credit-links a:hover {background: rgba(139,92,246,0.22); color:#e9d5ff;}
-
-/* ---------- Dropdown options popup ---------- */
-ul.options, div[role="listbox"] {
-  background: #14141f !important;
-  border: 1px solid #2a2a3d !important;
-}
-ul.options li, div[role="listbox"] div[role="option"], li.item {
-  color: #e4e4f0 !important;
-  background: transparent !important;
-}
-ul.options li:hover, div[role="listbox"] div[role="option"]:hover, li.item:hover,
-ul.options li.selected, li.item.selected {
-  background: #2a2a45 !important;
-  color: #e9d5ff !important;
-}
-"""
+CSS = _read_ui("theme.css")
+THEME_HEAD = "<script>\n" + _read_ui("theme-head.js") + "\n</script>"
+THEME_JS = _read_ui("theme.js")
 
 
 
@@ -395,6 +230,27 @@ def _header_pills_html():
     return "".join(f'<span class="pill">{_html.escape(pill)}</span>' for pill in pills)
 
 
+def _theme_picker_html():
+    """Theme + accent pickers. Wired only by ui/theme.js (no inline handlers)."""
+    themes = (("dark", "Dark"), ("light", "Light"), ("system", "System"))
+    accents = (("indigo", "Indigo"), ("emerald", "Emerald"),
+               ("rose", "Rose"), ("amber", "Amber"))
+    theme_opts = "".join(
+        f'<option value="{value}">{label}</option>' for value, label in themes)
+    accent_opts = "".join(
+        f'<option value="{value}">{label}</option>' for value, label in accents)
+    return (
+        '<div class="theme-controls">'
+        '<label for="hr-theme-select">Theme</label>'
+        f'<select id="hr-theme-select" class="theme-select" aria-label="Theme">'
+        f'{theme_opts}</select>'
+        '<label for="hr-accent-select">Accent</label>'
+        f'<select id="hr-accent-select" class="theme-select" aria-label="Accent">'
+        f'{accent_opts}</select>'
+        '</div>'
+    )
+
+
 def _header_html():
     return (
         '<div id="header-wrap">'
@@ -406,6 +262,7 @@ def _header_html():
         '</div>'
         '</div>'
         f'<div id="badges">{_header_pills_html()}</div>'
+        + _theme_picker_html()
         + creator_credit_html()
     )
 
@@ -533,52 +390,61 @@ def _disambiguated_labels(names_full):
     return labels
 
 
+_CHART_BG = "#f8fafc"
+_CHART_TEXT = "#1e293b"
+_CHART_MUTED = "#94a3b8"
+_CHART_GRID = "#cbd5e1"
+_CHART_BAR = "#4f46e5"
+_CHART_LINE = "#be123c"
+
+
 def make_score_chart(ranked):
     n = max(len(ranked), 1)
     names = _disambiguated_labels([c["name"] for c in ranked])
     scores = [c["match_percent"] for c in ranked]
     threshold = config.SHORTLIST_THRESHOLD
-    colors = ["#a855f7" if s >= threshold else "#3f3f52" for s in scores]
+    colors = [_CHART_BAR if s >= threshold else _CHART_MUTED for s in scores]
 
-    fig, ax = plt.subplots(figsize=(7.6, max(3.6, n * 0.34)), facecolor="#12121c")
-    ax.set_facecolor("#12121c")
+    fig, ax = plt.subplots(figsize=(7.6, max(3.6, n * 0.34)), facecolor=_CHART_BG)
+    ax.set_facecolor(_CHART_BG)
     bars = ax.barh(names[::-1], scores[::-1], color=colors[::-1], height=0.58)
-    ax.axvline(threshold, color="#f472b6", linestyle="--", linewidth=1, alpha=0.7)
-    ax.text(threshold + 1, n - 0.5, f"{threshold:.0f}% shortlist line", color="#f472b6", fontsize=8)
+    ax.axvline(threshold, color=_CHART_LINE, linestyle="--", linewidth=1, alpha=0.8)
+    ax.text(threshold + 1, n - 0.5, f"{threshold:.0f}% shortlist line",
+            color=_CHART_LINE, fontsize=8)
     ax.set_xlim(0, 108)
-    ax.set_xlabel("Match %", color="#c9c9dd", fontsize=9)
-    ax.tick_params(colors="#c9c9dd", labelsize=8.5)
+    ax.set_xlabel("Match %", color=_CHART_TEXT, fontsize=9)
+    ax.tick_params(colors=_CHART_TEXT, labelsize=8.5)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.grid(axis="x", color="#232336", linewidth=0.6)
+    ax.grid(axis="x", color=_CHART_GRID, linewidth=0.6)
     ax.set_axisbelow(True)
     for bar, score in zip(bars, scores[::-1]):
         ax.text(bar.get_width() + 1.5, bar.get_y() + bar.get_height() / 2,
-                 f"{score:.0f}%", va="center", color="#e9e9f5", fontsize=8)
+                 f"{score:.0f}%", va="center", color=_CHART_TEXT, fontsize=8)
     fig.tight_layout()
     return fig
 
 
 def make_skills_chart(top_skills):
     if not top_skills:
-        fig, ax = plt.subplots(figsize=(6, 4), facecolor="#12121c")
-        ax.set_facecolor("#12121c")
-        ax.text(0.5, 0.5, "No skill data", ha="center", color="#8b8ba7")
+        fig, ax = plt.subplots(figsize=(6, 4), facecolor=_CHART_BG)
+        ax.set_facecolor(_CHART_BG)
+        ax.text(0.5, 0.5, "No skill data", ha="center", color=_CHART_TEXT)
         ax.axis("off")
         return fig
     labels, counts = zip(*top_skills)
-    fig, ax = plt.subplots(figsize=(7.2, 4.4), facecolor="#12121c")
-    ax.set_facecolor("#12121c")
-    bars = ax.bar(labels, counts, color="#6366f1", width=0.6)
-    ax.tick_params(colors="#c9c9dd", labelsize=8.5, rotation=25)
-    ax.set_ylabel("Candidates", color="#c9c9dd", fontsize=9)
+    fig, ax = plt.subplots(figsize=(7.2, 4.4), facecolor=_CHART_BG)
+    ax.set_facecolor(_CHART_BG)
+    bars = ax.bar(labels, counts, color=_CHART_BAR, width=0.6)
+    ax.tick_params(colors=_CHART_TEXT, labelsize=8.5, rotation=25)
+    ax.set_ylabel("Candidates", color=_CHART_TEXT, fontsize=9)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.grid(axis="y", color="#232336", linewidth=0.6)
+    ax.grid(axis="y", color=_CHART_GRID, linewidth=0.6)
     ax.set_axisbelow(True)
     for bar, c in zip(bars, counts):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.15,
-                 str(c), ha="center", color="#e9e9f5", fontsize=8.5)
+                 str(c), ha="center", color=_CHART_TEXT, fontsize=8.5)
     fig.tight_layout()
     return fig
 
@@ -2011,7 +1877,7 @@ def _init_session(request: gr.Request = None):
 # --------------------------------------------------------------------------- #
 # Layout
 # --------------------------------------------------------------------------- #
-with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
+with gr.Blocks(title="Smart HR Recruitment") as demo:
     sent_invitations_state = gr.State([])
     # The HR's own default invitation text lives in THEIR browser (localStorage). storage_key and
     # secret must be fixed: left random they change on every server restart (Render sleeps a lot)
@@ -2334,7 +2200,8 @@ def main() -> None:
         max_size=config.QUEUE_MAX_SIZE,
         default_concurrency_limit=config.QUEUE_CONCURRENCY_LIMIT,
     )
-    demo.launch(server_name="0.0.0.0", server_port=port, share=False)
+    demo.launch(server_name="0.0.0.0", server_port=port, share=False,
+                theme=THEME, css=CSS, js=THEME_JS, head=THEME_HEAD)
 
 
 if __name__ == "__main__":
