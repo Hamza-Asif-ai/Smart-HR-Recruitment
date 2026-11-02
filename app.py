@@ -355,12 +355,58 @@ ul.options li.selected, li.item.selected {
 
 
 
+_LI_SVG = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>')
+_GH_SVG = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>')
+_LINKEDIN_URL = "https://www.linkedin.com"
+_GITHUB_URL = "https://github.com"
+
+
 def creator_credit_html():
-    """Generic project credit (no personal profiles or contact details)."""
+    """'Designed & built by' line with LinkedIn / GitHub pills (no personal PII)."""
     return (
         '<div class="credit-line">'
-        '<span>Smart HR Recruitment · built with Google ADK</span>'
+        '<span>Designed &amp; built by <b>Smart HR Team</b></span>'
+        f'<a class="social-pill li" href="{_LINKEDIN_URL}" target="_blank" '
+        f'rel="noopener noreferrer">{_LI_SVG}LinkedIn</a>'
+        f'<a class="social-pill gh" href="{_GITHUB_URL}" target="_blank" '
+        f'rel="noopener noreferrer">{_GH_SVG}GitHub</a>'
         '</div>'
+    )
+
+
+def _header_pills_html():
+    """Header pills derived from live configuration, never hard-coded claims."""
+    try:
+        manager = auth_mod.get_auth_manager()
+        auth_pill = "🔒 RBAC secured" if manager.enabled else "🔓 Local demo"
+    except Exception:
+        auth_pill = "🔓 Local demo"
+    try:
+        status = phase3_runner.model_status()
+        agent_pill = "🧩 4 specialized agents" if status.agentic else "🧩 Deterministic pipeline"
+    except Exception:
+        agent_pill = "🧩 Deterministic pipeline"
+    try:
+        from src import mcp_filesystem_server as _mcp  # noqa: F401
+        storage_pill = "📁 MCP filesystem"
+    except Exception:
+        storage_pill = "📁 Local files"
+    pills = (auth_pill, agent_pill, storage_pill)
+    return "".join(f'<span class="pill">{_html.escape(pill)}</span>' for pill in pills)
+
+
+def _header_html():
+    return (
+        '<div id="header-wrap">'
+        '<div id="logo-badge">SH</div>'
+        '<div id="header-text">'
+        '<h1>Smart HR Recruitment</h1>'
+        '<p>Multi-agent AI pipeline — JD parsing → Resume screening → '
+        'Interview scheduling → Insights</p>'
+        '</div>'
+        '</div>'
+        f'<div id="badges">{_header_pills_html()}</div>'
+        + creator_credit_html()
     )
 
 
@@ -1965,7 +2011,7 @@ def _init_session(request: gr.Request = None):
 # --------------------------------------------------------------------------- #
 # Layout
 # --------------------------------------------------------------------------- #
-with gr.Blocks(title="Smart HR Recruitment") as demo:
+with gr.Blocks(theme=THEME, css=CSS, title="Smart HR Recruitment") as demo:
     sent_invitations_state = gr.State([])
     # The HR's own default invitation text lives in THEIR browser (localStorage). storage_key and
     # secret must be fixed: left random they change on every server restart (Render sleeps a lot)
@@ -1982,22 +2028,8 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
     run_context_state = gr.State(None)
     overrides_state = gr.State([])
     replies_action_state = gr.State({"replies_status": {}})
-    session_banner = gr.HTML()
 
-    gr.HTML("""
-      <div id="header-wrap">
-        <div id="logo-badge">SH</div>
-        <div id="header-text">
-          <h1>Smart HR Recruitment</h1>
-          <p>Multi-agent AI pipeline — JD parsing → Resume screening → Interview scheduling → Insights</p>
-        </div>
-      </div>
-      <div id="badges">
-        <span class="pill">🔒 RBAC secured</span>
-        <span class="pill">🧩 4 specialized agents</span>
-        <span class="pill">📁 MCP filesystem</span>
-      </div>
-    """ + creator_credit_html())
+    gr.HTML(_header_html())
 
     gr.Markdown("### 🎯 What are you hiring for?  \nCandidates are detected, ranked, shortlisted and recommended against these requirements.")
     with gr.Row():
@@ -2155,6 +2187,7 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
     with gr.Accordion("🔍 Developer Tools (Agent Trace)", open=False,
                       visible=False) as dev_tools:
         gr.Markdown("View agent execution traces for observability. Admin role only.")
+        session_banner = gr.HTML()
         trace_table = gr.Dataframe(
             headers=["Agent", "Action", "Tool", "Input Summary", "Output Summary", "Duration (ms)", "Timestamp"],
             interactive=False,
