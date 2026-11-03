@@ -133,25 +133,43 @@ BLIND_MODE_DEFAULT = os.environ.get("BLIND_MODE", "").strip() == "1"
 # --------------------------------------------------------------------------- #
 _DATA_ROOT = Path(os.environ.get("HR_DATA_ROOT", "./data")).expanduser()
 
-GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
-GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
-GOOGLE_OAUTH_REDIRECT_URI = (
-    os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8080/oauth2callback").strip()
-    or "http://localhost:8080/oauth2callback"
+GOOGLE_CLIENT_ID = (
+    os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+    or os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
 )
+GOOGLE_CLIENT_SECRET = (
+    os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+    or os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+)
+OAUTH_REDIRECT_URI = (
+    os.environ.get("OAUTH_REDIRECT_URI", "").strip()
+    or os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip()
+    or "http://localhost:7860/callback"
+)
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
+TOKEN_ENC_KEY = os.environ.get("TOKEN_ENC_KEY", "").strip()
+OAUTH_SESSION_TTL_SECONDS = _env_int("OAUTH_SESSION_TTL_SECONDS", 8 * 3600,
+                                     minimum=60, maximum=30 * 24 * 3600)
+OAUTH_STATE_TTL_SECONDS = _env_int("OAUTH_STATE_TTL_SECONDS", 600,
+                                   minimum=30, maximum=3600)
+# Backwards-compatible aliases used by src/google_oauth.py and src/calendar_api.py.
+GOOGLE_OAUTH_CLIENT_ID = GOOGLE_CLIENT_ID
+GOOGLE_OAUTH_CLIENT_SECRET = GOOGLE_CLIENT_SECRET
+GOOGLE_OAUTH_REDIRECT_URI = OAUTH_REDIRECT_URI
 GOOGLE_OAUTH_AUTH_URI = os.environ.get(
     "GOOGLE_OAUTH_AUTH_URI", "https://accounts.google.com/o/oauth2/v2/auth"
 ).strip()
 GOOGLE_OAUTH_TOKEN_URI = os.environ.get(
     "GOOGLE_OAUTH_TOKEN_URI", "https://oauth2.googleapis.com/token"
 ).strip()
+GOOGLE_OAUTH_REVOKE_URI = os.environ.get(
+    "GOOGLE_OAUTH_REVOKE_URI", "https://oauth2.googleapis.com/revoke"
+).strip()
 GOOGLE_OAUTH_SCOPES = tuple(
     scope for scope in (
         item.strip() for item in os.environ.get(
             "GOOGLE_OAUTH_SCOPES",
-            "openid email "
-            "https://www.googleapis.com/auth/gmail.readonly "
-            "https://www.googleapis.com/auth/calendar.freebusy",
+            "openid email https://www.googleapis.com/auth/gmail.readonly",
         ).replace(",", " ").split()
     ) if scope
 )
@@ -247,11 +265,19 @@ __all__ = [
     "MEMORY_HMAC_KEY",
     "APPROVAL_QUEUE_MAX_SIZE",
     "BLIND_MODE_DEFAULT",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "OAUTH_REDIRECT_URI",
+    "SESSION_SECRET",
+    "TOKEN_ENC_KEY",
+    "OAUTH_SESSION_TTL_SECONDS",
+    "OAUTH_STATE_TTL_SECONDS",
     "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET",
     "GOOGLE_OAUTH_REDIRECT_URI",
     "GOOGLE_OAUTH_AUTH_URI",
     "GOOGLE_OAUTH_TOKEN_URI",
+    "GOOGLE_OAUTH_REVOKE_URI",
     "GOOGLE_OAUTH_SCOPES",
     "GOOGLE_OAUTH_TOKEN_FILE",
     "GMAIL_API_BASE",

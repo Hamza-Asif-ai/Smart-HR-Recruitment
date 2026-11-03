@@ -27,6 +27,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
+from cryptography.fernet import Fernet, InvalidToken
 
 from . import config
 from .security import scrub_secrets
@@ -42,6 +43,14 @@ class OAuthNotConfigured(OAuthError):
 
 class OAuthTokenError(OAuthError):
     """The token endpoint rejected or could not refresh a token."""
+
+
+class OAuthStateError(OAuthError):
+    """The OAuth state is missing, expired, or already used."""
+
+
+class OAuthSessionError(OAuthError):
+    """The encrypted server-side session store is unavailable."""
 
 
 @dataclass
@@ -76,6 +85,7 @@ class OAuthConfig:
     redirect_uri: str
     auth_uri: str = config.GOOGLE_OAUTH_AUTH_URI
     token_uri: str = config.GOOGLE_OAUTH_TOKEN_URI
+    revoke_uri: str = config.GOOGLE_OAUTH_REVOKE_URI
     scopes: Tuple[str, ...] = config.GOOGLE_OAUTH_SCOPES
     token_file: str = config.GOOGLE_OAUTH_TOKEN_FILE
 
@@ -87,6 +97,7 @@ class OAuthConfig:
             redirect_uri=config.GOOGLE_OAUTH_REDIRECT_URI,
             auth_uri=config.GOOGLE_OAUTH_AUTH_URI,
             token_uri=config.GOOGLE_OAUTH_TOKEN_URI,
+            revoke_uri=config.GOOGLE_OAUTH_REVOKE_URI,
             scopes=config.GOOGLE_OAUTH_SCOPES,
             token_file=config.GOOGLE_OAUTH_TOKEN_FILE,
         )
@@ -330,6 +341,189 @@ class GoogleOAuth:
         return refreshed.access_token
 
 
+def _fernet_from_secret(secret: str) -> Fernet:
+    """Derive a stable 32-byte Fernet key from an arbitrary secret string."""
+    digest = hashlib.sha256(secret.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def verify_pkce(code_verifier: str, code_challenge: str) -> bool:
+    """Check an S256 PKCE verifier against the challenge sent to Google."""
+    if not code_verifier or not code_challenge:
+        return False
+    expected = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode("ascii")).digest()
+    ).rstrip(b"=").decode("ascii")
+    return secrets.compare_digest(expected, code_challenge)
+
+
+def revoke_token(
+    token: OAuthToken,
+    config_value: Optional[OAuthConfig] = None,
+    *,
+    session: Optional[requests.Session] = None,
+) -> bool:
+    """Revoke a token at Google. Never logs or returns the token itself."""
+    target = token.refresh_token or token.access_token
+    if not target:
+        return False
+    cfg = config_value or OAuthConfig.from_env()
+    try:
+        response = (session or requests).post(
+            cfg.revoke_uri, data={"token": target}, timeout=15
+        )
+    except requests.RequestException:
+        return False
+    return response.status_code in (200, 204)
+
+
+class OAuthStateStore:
+    """Single-use, short-lived OAuth state values bound to a browser session."""
+
+    def __init__(self, *, ttl_seconds: Optional[int] = None, clock=time.time):
+        self.ttl_seconds = int(
+            ttl_seconds if ttl_seconds is not None else config.OAUTH_STATE_TTL_SECONDS
+        )
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._states: Dict[str, Tuple[str, str, float]] = {}
+
+    def _purge(self) -> None:
+        now = self.clock()
+        for key in [k for k, (_, _, exp) in self._states.items() if exp <= now]:
+            self._states.pop(key, None)
+
+    def issue(self, session_id: str, code_verifier: str) -> str:
+        if not session_id or not code_verifier:
+            raise OAuthStateError("Cannot start Google sign-in without a session.")
+        state = secrets.token_urlsafe(32)
+        with self._lock:
+            self._purge()
+            self._states[state] = (
+                session_id,
+                code_verifier,
+                self.clock() + self.ttl_seconds,
+            )
+        return state
+
+    def consume(self, state: str) -> Tuple[str, str]:
+        if not state:
+            raise OAuthStateError("Missing OAuth state.")
+        with self._lock:
+            self._purge()
+            record = self._states.pop(state, None)
+        if record is None:
+            raise OAuthStateError("OAuth state is invalid, expired, or already used.")
+        session_id, verifier, _expires = record
+        return session_id, verifier
+
+
+class TokenSessionStore:
+    """Fernet-encrypted, in-memory OAuth tokens keyed by a random session id."""
+
+    def __init__(
+        self,
+        encryption_key: Optional[str] = None,
+        *,
+        ttl_seconds: Optional[int] = None,
+        clock=time.time,
+        config_value: Optional[OAuthConfig] = None,
+        http_session: Optional[requests.Session] = None,
+    ):
+        secret = encryption_key if encryption_key is not None else config.TOKEN_ENC_KEY
+        self._fernet = _fernet_from_secret(secret) if secret else None
+        self.ttl_seconds = int(
+            ttl_seconds if ttl_seconds is not None else config.OAUTH_SESSION_TTL_SECONDS
+        )
+        self.clock = clock
+        self.config = config_value or OAuthConfig.from_env()
+        self.http_session = http_session
+        self._lock = threading.RLock()
+        self._sessions: Dict[str, Tuple[bytes, float]] = {}
+
+    @property
+    def configured(self) -> bool:
+        return self._fernet is not None
+
+    def _purge(self) -> None:
+        now = self.clock()
+        for key in [k for k, (_, exp) in self._sessions.items() if exp <= now]:
+            self._sessions.pop(key, None)
+
+    def create(self, token: OAuthToken) -> str:
+        if self._fernet is None:
+            raise OAuthSessionError("TOKEN_ENC_KEY is not configured.")
+        session_id = secrets.token_urlsafe(32)
+        payload = self._fernet.encrypt(token.to_json().encode("utf-8"))
+        with self._lock:
+            self._purge()
+            self._sessions[session_id] = (
+                payload,
+                self.clock() + self.ttl_seconds,
+            )
+        return session_id
+
+    def update(self, session_id: str, token: OAuthToken) -> None:
+        """Store or replace the token for ``session_id`` (used by the callback)."""
+        if not session_id or self._fernet is None:
+            return
+        payload = self._fernet.encrypt(token.to_json().encode("utf-8"))
+        with self._lock:
+            self._purge()
+            self._sessions[session_id] = (
+                payload,
+                self.clock() + self.ttl_seconds,
+            )
+
+    def get(self, session_id: Optional[str]) -> Optional[OAuthToken]:
+        if not session_id or self._fernet is None:
+            return None
+        with self._lock:
+            self._purge()
+            record = self._sessions.get(session_id)
+        if record is None:
+            return None
+        payload, _expires = record
+        try:
+            raw = self._fernet.decrypt(payload).decode("utf-8")
+            data = json.loads(raw)
+            return OAuthToken(
+                access_token=str(data.get("access_token", "") or ""),
+                refresh_token=str(data.get("refresh_token", "") or ""),
+                expires_at=float(data.get("expires_at", 0) or 0),
+                scope=str(data.get("scope", "") or ""),
+                token_type=str(data.get("token_type", "Bearer") or "Bearer"),
+            )
+        except (InvalidToken, ValueError, TypeError):
+            return None
+
+    def get_access_token(self, session_id: Optional[str]) -> Optional[str]:
+        token = self.get(session_id)
+        if token is None:
+            return None
+        if not token.expired:
+            return token.access_token
+        if not token.refresh_token:
+            return None
+        try:
+            refreshed = refresh_token(token, self.config, session=self.http_session)
+        except OAuthError:
+            return None
+        self.update(session_id, refreshed)
+        return refreshed.access_token
+
+    def pop(self, session_id: Optional[str]) -> Optional[OAuthToken]:
+        if not session_id:
+            return None
+        token = self.get(session_id)
+        with self._lock:
+            self._sessions.pop(session_id, None)
+        return token
+
+    def delete(self, session_id: Optional[str]) -> Optional[OAuthToken]:
+        return self.pop(session_id)
+
+
 _DEFAULT_OAUTH: Optional[GoogleOAuth] = None
 _DEFAULT_LOCK = threading.Lock()
 
@@ -431,16 +625,22 @@ __all__ = [
     "OAuthConfig",
     "OAuthError",
     "OAuthNotConfigured",
+    "OAuthSessionError",
+    "OAuthStateError",
+    "OAuthStateStore",
     "OAuthToken",
     "OAuthTokenError",
+    "TokenSessionStore",
     "build_authorization_url",
     "default_oauth",
     "exchange_code",
     "load_token",
     "refresh_token",
+    "revoke_token",
     "run_local_flow",
     "save_token",
     "userinfo",
+    "verify_pkce",
 ]
 
 
