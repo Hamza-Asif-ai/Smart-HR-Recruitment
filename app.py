@@ -12,7 +12,7 @@ Deploy on Hugging Face Spaces:
     3. Space auto-installs from requirements.txt and launches app.py
 
 Email sending/receiving:
-    - Reads Gmail through the read-only Gmail API after Google sign-in.
+    - Reads Gmail through IMAP using a Gmail App Password entered in the UI.
     - Sends interview invitations through Brevo; the Brevo key is entered in
       the UI at runtime and is never written to disk.
 """
@@ -20,13 +20,10 @@ Email sending/receiving:
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
+import imaplib
 import os
 import re
-import secrets
 from pathlib import Path
-from urllib.parse import urlparse
 import html as _html
 import email as email_lib
 import email.utils
@@ -38,18 +35,13 @@ from io import BytesIO
 from collections import Counter
 
 import pypdf
-import uvicorn
-from fastapi import FastAPI, Request as FastAPIRequest
-from fastapi.responses import HTMLResponse, RedirectResponse
 from src import auth as auth_mod
 from src import calendar_api
 from src import config
 from src import exporters
 from src import extractor as extractor_mod
-from src import google_oauth as oauth_mod
 from src import guardrails as guardrails_mod
 from src import phase3_runner
-from src.gmail_api import GmailAPIError, GmailInbox
 from src import runtime
 from src import scorecard
 from src import skills as skills_mod
@@ -156,145 +148,6 @@ def _authorized(request, capability):
 def _denied_html(capability=""):
     detail = f" ({_html.escape(capability)})" if capability else ""
     return f'<div class="status-line err">⛔ Your role is not allowed to do that{detail}.</div>'
-
-
-# --------------------------------------------------------------------------- #
-# Google sign-in state (server-side only; the cookie carries a random session id)
-# --------------------------------------------------------------------------- #
-GOOGLE_SESSION_COOKIE = "hr_google_session"
-_GOOGLE_STATE_STORE = None
-_GOOGLE_SESSION_STORE = None
-_GOOGLE_STORE_LOCK = threading.Lock()
-
-
-def _oauth_missing_env():
-    """Return the names of the required Google sign-in env vars that are unset."""
-    required = (
-        ("GOOGLE_CLIENT_ID", config.GOOGLE_CLIENT_ID),
-        ("GOOGLE_CLIENT_SECRET", config.GOOGLE_CLIENT_SECRET),
-        ("OAUTH_REDIRECT_URI", config.OAUTH_REDIRECT_URI),
-        ("SESSION_SECRET", config.SESSION_SECRET),
-        ("TOKEN_ENC_KEY", config.TOKEN_ENC_KEY),
-    )
-    return [name for name, value in required if not str(value or "").strip()]
-
-
-def _oauth_configured() -> bool:
-    return not _oauth_missing_env()
-
-
-def _google_state_store() -> oauth_mod.OAuthStateStore:
-    global _GOOGLE_STATE_STORE
-    with _GOOGLE_STORE_LOCK:
-        if _GOOGLE_STATE_STORE is None:
-            _GOOGLE_STATE_STORE = oauth_mod.OAuthStateStore()
-        return _GOOGLE_STATE_STORE
-
-
-def _google_session_store() -> oauth_mod.TokenSessionStore:
-    global _GOOGLE_SESSION_STORE
-    with _GOOGLE_STORE_LOCK:
-        if _GOOGLE_SESSION_STORE is None:
-            _GOOGLE_SESSION_STORE = oauth_mod.TokenSessionStore()
-        return _GOOGLE_SESSION_STORE
-
-
-def _reset_google_stores() -> None:
-    """Test helper: rebuild stores after changing OAuth environment variables."""
-    global _GOOGLE_STATE_STORE, _GOOGLE_SESSION_STORE
-    with _GOOGLE_STORE_LOCK:
-        _GOOGLE_STATE_STORE = None
-        _GOOGLE_SESSION_STORE = None
-
-
-def _sign_session_id(session_id: str) -> str:
-    if not config.SESSION_SECRET:
-        return session_id
-    signature = hmac.new(
-        config.SESSION_SECRET.encode("utf-8"),
-        session_id.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{session_id}.{signature}"
-
-
-def _session_id_from_cookie(raw: str) -> str:
-    if not raw or not config.SESSION_SECRET:
-        return ""
-    if "." not in raw:
-        return ""
-    session_id, signature = raw.rsplit(".", 1)
-    expected = hmac.new(
-        config.SESSION_SECRET.encode("utf-8"),
-        session_id.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return session_id if hmac.compare_digest(signature, expected) else ""
-
-
-def _session_id_from_request(request) -> str:
-    if request is None:
-        return ""
-    cookies = getattr(request, "cookies", {}) or {}
-    try:
-        raw = cookies.get(GOOGLE_SESSION_COOKIE, "")
-    except AttributeError:
-        raw = ""
-    return _session_id_from_cookie(str(raw or ""))
-
-
-def _cookie_is_secure() -> bool:
-    host = (urlparse(config.OAUTH_REDIRECT_URI).hostname or "").lower()
-    return host not in {"localhost", "127.0.0.1", "::1"}
-
-
-def _set_session_cookie(response, session_id: str) -> None:
-    response.set_cookie(
-        key=GOOGLE_SESSION_COOKIE,
-        value=_sign_session_id(session_id),
-        max_age=config.OAUTH_SESSION_TTL_SECONDS,
-        httponly=True,
-        secure=_cookie_is_secure(),
-        samesite="lax",
-        path="/",
-    )
-
-
-def _gmail_inbox_for_request(request) -> GmailInbox:
-    session_id = _session_id_from_request(request)
-    store = _google_session_store()
-    if not session_id or store.get(session_id) is None:
-        raise oauth_mod.OAuthNotConfigured(
-            "Gmail is not connected. Use Sign in with Google first."
-        )
-    return GmailInbox(lambda: store.get_access_token(session_id))
-
-
-def _google_status_html(request: gr.Request = None) -> str:
-    missing = _oauth_missing_env()
-    if missing:
-        hint = "Google sign-in is disabled: set " + ", ".join(missing) + "."
-        return (
-            '<div class="google-status">'
-            '<span class="google-btn disabled">Sign in with Google</span>'
-            f'<span class="google-hint">{_html.escape(hint)}</span>'
-            '</div>'
-        )
-    session_id = _session_id_from_request(request)
-    if session_id and _google_session_store().get(session_id) is not None:
-        return (
-            '<div class="google-status">'
-            '<span class="google-hint">✅ Google account connected — '
-            'read-only Gmail access.</span>'
-            '<a class="logout-btn" href="/logout">Disconnect</a>'
-            '</div>'
-        )
-    return (
-        '<div class="google-status">'
-        '<a class="google-btn" href="/auth/google/start">Sign in with Google</a>'
-        '<span class="google-hint">Read-only Gmail access. No password is stored.</span>'
-        '</div>'
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -761,6 +614,44 @@ def _extract_plain_body(msg) -> str:
         return ""
 
 
+def _imap_connect(gmail_address: str, app_password: str):
+    """Open an authenticated, read-only IMAP session for the recruiter's inbox."""
+    imap = imaplib.IMAP4_SSL(
+        config.IMAP_HOST, config.IMAP_PORT, timeout=config.IMAP_TIMEOUT_SECONDS
+    )
+    try:
+        imap.login(gmail_address, app_password)
+        imap.select("INBOX")
+    except Exception:
+        _imap_logout(imap)
+        raise
+    return imap
+
+
+def _imap_message_ids(imap, limit: int):
+    """Return the newest ``limit`` message ids (oldest first, as IMAP stores them)."""
+    status, data = imap.search(None, "ALL")
+    if not data or not data[0]:
+        return []
+    return data[0].split()[-limit:]
+
+
+def _imap_fetch_raw(imap, msg_id):
+    """Fetch one message as raw RFC822 bytes, or ``None`` when unavailable."""
+    status, msg_data = imap.fetch(msg_id, "(RFC822)")
+    if not msg_data or not msg_data[0]:
+        return None
+    raw = msg_data[0][1]
+    return bytes(raw) if isinstance(raw, (bytes, bytearray)) else None
+
+
+def _imap_logout(imap) -> None:
+    try:
+        imap.logout()
+    except Exception:
+        pass
+
+
 def _attachment_payload(part):
     """Decode one attachment only when it fits the configured size limit."""
     limit = config.IMAP_MAX_ATTACHMENT_BYTES
@@ -879,16 +770,20 @@ def handle_decline(email, state, request: gr.Request = None):
     return (f'<div class="status-line ok">❌ { _html.escape(email) } marked as <b>Declined</b>.</div>', new_state)
 
 
-def _scan_replies(emails_state=None, request: gr.Request = None):
+def _scan_replies(gmail_address, app_password, emails_state=None):
     """Return ``(status_html, reply_dicts)`` for replies to our invitations."""
+    if not gmail_address or not app_password:
+        return ('<div class="status-line err">⚠ Please enter both the Gmail address '
+                'and the App Password.</div>', [])
     candidate_addrs = {str(e.get("to", "")).lower() for e in (emails_state or [])
                        if isinstance(e, dict)}
     replies = []
+    imap = None
     try:
-        inbox = _gmail_inbox_for_request(request)
-        ids = inbox.message_ids(config.IMAP_SCAN_LIMIT)
-        for msg_id in ids:
-            raw = inbox.fetch_raw(msg_id)
+        imap = _imap_connect(gmail_address, app_password)
+        ids = _imap_message_ids(imap, config.IMAP_SCAN_LIMIT)
+        for msg_id in reversed(ids):
+            raw = _imap_fetch_raw(imap, msg_id)
             if not raw:
                 continue
             msg = email_lib.message_from_bytes(raw)
@@ -917,12 +812,15 @@ def _scan_replies(emails_state=None, request: gr.Request = None):
                 "body": body[:600],
                 "invited": from_invited,
             })
-    except oauth_mod.OAuthError as ex:
-        return (f'<div class="status-line err">⚠ {_html.escape(str(ex))}</div>', [])
-    except GmailAPIError as ex:
-        return (f'<div class="status-line err">❌ {_html.escape(str(ex))}</div>', [])
+    except imaplib.IMAP4.error as ex:
+        return (f'<div class="status-line err">❌ IMAP error: '
+                f'{_error_html(ex, (app_password,))} (check the App Password)</div>', [])
     except Exception as ex:  # noqa: BLE001 - sanitized for display
-        return (f'<div class="status-line err">❌ Error: {_error_html(ex)}</div>', [])
+        return (f'<div class="status-line err">❌ Error: '
+                f'{_error_html(ex, (app_password,))}</div>', [])
+    finally:
+        if imap is not None:
+            _imap_logout(imap)
 
     if not replies:
         return '<div class="empty-state">No replies to your interview invitations found yet.</div>', []
@@ -952,19 +850,20 @@ def _scan_replies(emails_state=None, request: gr.Request = None):
     return f'<div class="reply-grid">{"".join(cards)}</div>', replies
 
 
-def check_replies(emails_state=None, request: gr.Request = None):
+def check_replies(gmail_address, app_password, emails_state=None, request: gr.Request = None):
     """Show only replies to the interview invitations this app sent."""
     if not _authorized(request, "read_resume"):
         return _denied_html("read_resume")
-    status_html, _replies = _scan_replies(emails_state, request)
+    status_html, _replies = _scan_replies(gmail_address, app_password, emails_state)
     return status_html
 
 
-def check_replies_ui(emails_state=None, request: gr.Request = None):
+def check_replies_ui(gmail_address, app_password, emails_state=None,
+                     request: gr.Request = None):
     """UI variant that also populates the real Gradio reply-picker control."""
     if not _authorized(request, "read_resume"):
         return _denied_html("read_resume"), gr.update(choices=[], value=None)
-    status_html, replies = _scan_replies(emails_state, request)
+    status_html, replies = _scan_replies(gmail_address, app_password, emails_state)
     choices = []
     for r in replies:
         label = f"{r['from']} — {r['subject'][:60]}"
@@ -1521,10 +1420,10 @@ def _recommendation_for(match):
     return skills_mod.recommendation_for_score(match)
 
 
-def analyze_inbox_applications(position, skills_text, nice_text,
+def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text,
                                min_years, use_coordinator=False, blind_mode=False,
                                request: gr.Request = None, limit=60):
-    """Scan Gmail with the read-only API and run every candidate through Phase 3.
+    """Scan Gmail over IMAP and run every candidate through the Phase 3 blocks.
 
     The LLM is confined to quote-verified extraction. Scoring, review flags,
     ranking and drafting are deterministic. If the ADK coordinator is enabled
@@ -1544,10 +1443,9 @@ def analyze_inbox_applications(position, skills_text, nice_text,
         return _fail('<div class="status-line err">⚠ Enter the position you are hiring for.</div>')
     if not _parse_skill_list(skills_text):
         return _fail('<div class="status-line err">⚠ Enter at least one required skill (comma separated).</div>')
-    try:
-        inbox = _gmail_inbox_for_request(request)
-    except oauth_mod.OAuthError as ex:
-        return _fail(f'<div class="status-line err">⚠ {_html.escape(str(ex))}</div>')
+    if not gmail_address or not app_password:
+        return _fail('<div class="status-line err">⚠ Please enter both the Gmail address '
+                     'and the App Password.</div>')
 
     requirements = build_custom_requirements(position, skills_text, nice_text, min_years)
     wanted = requirements["required_skills"] + requirements["nice_to_have"]
@@ -1567,12 +1465,14 @@ def analyze_inbox_applications(position, skills_text, nice_text,
     selected_model = model_state.model or config.get_gemini_model()
     memory = _candidate_memory()
     run_ctx = runtime.new_run_context(max_steps=scan_limit * 3 + 15)
+    imap = None
     try:
+        imap = _imap_connect(gmail_address, app_password)
         with runtime.QUEUE_GATE.slot(timeout=30):
             position_words = _position_words(requirements["title"])
-            ids = inbox.message_ids(scan_limit)
-            for msg_id in ids:
-                raw = inbox.fetch_raw(msg_id)
+            ids = _imap_message_ids(imap, scan_limit)
+            for msg_id in reversed(ids):
+                raw = _imap_fetch_raw(imap, msg_id)
                 if not raw:
                     run_ctx.budget.consume()
                     continue
@@ -1642,14 +1542,17 @@ def analyze_inbox_applications(position, skills_text, nice_text,
                                      output_summary=result["recommendation"])
     except runtime.QueueFullError:
         return _fail('<div class="status-line err">⚠ The server is busy. Try again shortly.</div>')
-    except oauth_mod.OAuthError as ex:
-        return _fail(f'<div class="status-line err">⚠ {_html.escape(str(ex))}</div>')
-    except GmailAPIError as ex:
-        return _fail(f'<div class="status-line err">❌ {_html.escape(str(ex))}</div>')
+    except imaplib.IMAP4.error as ex:
+        return _fail(f'<div class="status-line err">❌ IMAP error: '
+                     f'{_error_html(ex, (app_password,))} (check the App Password)</div>')
     except runtime.BudgetExceededError:
         return _fail('<div class="status-line err">⚠ This scan exceeded the per-run budget.</div>')
     except Exception as ex:  # noqa: BLE001 - sanitized for display
-        return _fail(f'<div class="status-line err">❌ Error: {_error_html(ex)}</div>')
+        return _fail(f'<div class="status-line err">❌ Error: '
+                     f'{_error_html(ex, (app_password,))}</div>')
+    finally:
+        if imap is not None:
+            _imap_logout(imap)
 
     if use_coordinator and candidates:
         if phase3_runner.coordinator_available() and not run_ctx.budget.degraded:
@@ -2045,14 +1948,19 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
         workspace_status = gr.HTML()
 
     with gr.Accordion(
-            "📧 Gmail inbox access — sign in with Google "
-            "(used for Applications + Replies tabs)", open=False):
+            "📧 Gmail inbox access — enter YOUR OWN Gmail "
+            "(used for Applications + Replies tabs, never saved)", open=False):
         gr.Markdown(
-            "Applications and replies are read through the **read-only Gmail API** after you "
-            "sign in with Google. Tokens stay on the server, encrypted; your password is "
-            "never seen or stored."
+            "Applications and replies are read over **IMAP** using a **Gmail App Password** "
+            "(not your normal password). Credentials stay in this browser session and are "
+            "never saved.\n\n"
+            "Generate one at `myaccount.google.com/apppasswords` "
+            "(requires 2-Step Verification to be ON)."
         )
-        google_status = gr.HTML(_google_status_html())
+        gmail_email_in = gr.Textbox(
+            label="Gmail address", placeholder="you@example.com")
+        gmail_app_password_in = gr.Textbox(
+            label="App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
 
     with gr.Accordion("📧 Brevo sender details — used to actually send emails (never saved)", open=False):
         gr.Markdown(
@@ -2063,8 +1971,8 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
             "2. Get your key under **Transactional → Settings → API Keys → Generate a new API key**\n"
             "3. ⚠ Brevo also requires **phone verification** on your account before it will send its "
             "first email — check the banner at the top of your Brevo dashboard if sending fails.\n"
-            "4. ⚠ Replies are read from the Gmail account you connected with Google — "
-            "no separate email field is needed here."
+            "4. ⚠ **Use this same email as the \"Gmail address\" above** — replies land here, so "
+            "Replies checking only works if both fields point at the one inbox."
         )
         with gr.Row():
             sender_email_in = gr.Textbox(label="Sender email (verified in Brevo)", placeholder="you@example.com")
@@ -2158,8 +2066,8 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
 
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
-        inputs=[position_in, skills_in, nice_in, min_exp_in,
-                agentic_mode_in, blind_mode_in],
+        inputs=[gmail_email_in, gmail_app_password_in, position_in, skills_in, nice_in,
+                min_exp_in, agentic_mode_in, blind_mode_in],
         outputs=[stats_out, applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state, applications_cards_out],
     )
     inbox_state.change(
@@ -2214,7 +2122,6 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
     demo.load(load_saved_default, inputs=[saved_default_state], outputs=[default_text_box])
     demo.load(_init_session, inputs=None,
               outputs=[run_context_state, dev_tools, session_banner])
-    demo.load(_google_status_html, inputs=None, outputs=[google_status])
     invite_mode_in.change(lambda m: gr.update(visible=(m == "custom")),
                           inputs=[invite_mode_in], outputs=[custom_invite_box])
 
@@ -2243,7 +2150,7 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
 
     refresh_btn.click(
         fn=check_replies_ui,
-        inputs=[sent_invitations_state],
+        inputs=[gmail_email_in, gmail_app_password_in, sent_invitations_state],
         outputs=[replies_out, replies_picker],
     )
     confirm_reply_btn.click(
@@ -2278,87 +2185,6 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
     gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
 
-# --------------------------------------------------------------------------- #
-# FastAPI shell: Google OAuth routes + Gradio mounted at /
-# --------------------------------------------------------------------------- #
-FASTAPI_APP = FastAPI(title="Smart HR Recruitment")
-
-
-@FASTAPI_APP.get("/auth/google/start")
-def google_start(request: FastAPIRequest):
-    missing = _oauth_missing_env()
-    if missing:
-        hint = "Google sign-in is disabled: set " + ", ".join(missing) + "."
-        return HTMLResponse(_html.escape(hint), status_code=503)
-    session_id = _session_id_from_cookie(
-        request.cookies.get(GOOGLE_SESSION_COOKIE, ""))
-    if not session_id:
-        session_id = secrets.token_urlsafe(32)
-    verifier = secrets.token_urlsafe(64)
-    try:
-        state = _google_state_store().issue(session_id, verifier)
-        cfg = oauth_mod.OAuthConfig.from_env()
-        url, _state, _verifier = oauth_mod.build_authorization_url(
-            cfg, state=state, code_verifier=verifier)
-    except oauth_mod.OAuthError as ex:
-        return HTMLResponse(_html.escape(str(ex)), status_code=503)
-    response = RedirectResponse(url, status_code=302)
-    _set_session_cookie(response, session_id)
-    return response
-
-
-@FASTAPI_APP.get("/callback")
-def google_callback(request: FastAPIRequest, code: str = "", state: str = "",
-                    error: str = ""):
-    if error:
-        return HTMLResponse("Google sign-in was cancelled.", status_code=400)
-    try:
-        session_id, verifier = _google_state_store().consume(state)
-    except oauth_mod.OAuthStateError as ex:
-        return HTMLResponse(_html.escape(str(ex)), status_code=400)
-    if not code:
-        return HTMLResponse("Google did not return an authorization code.",
-                            status_code=400)
-    try:
-        token = oauth_mod.exchange_code(
-            code, oauth_mod.OAuthConfig.from_env(), code_verifier=verifier)
-    except oauth_mod.OAuthError:
-        return HTMLResponse("Google sign-in failed. Please try again.",
-                            status_code=400)
-    store = _google_session_store()
-    if not store.configured:
-        return HTMLResponse("TOKEN_ENC_KEY is not configured.", status_code=503)
-    store.update(session_id, token)
-    response = RedirectResponse("/", status_code=303)
-    _set_session_cookie(response, session_id)
-    return response
-
-
-@FASTAPI_APP.get("/logout")
-def google_logout(request: FastAPIRequest):
-    session_id = _session_id_from_cookie(
-        request.cookies.get(GOOGLE_SESSION_COOKIE, ""))
-    token = _google_session_store().pop(session_id) if session_id else None
-    if token is not None and _oauth_configured():
-        try:
-            oauth_mod.revoke_token(token, oauth_mod.OAuthConfig.from_env())
-        except Exception:  # noqa: BLE001 - local logout must still succeed
-            pass
-    response = RedirectResponse("/", status_code=303)
-    response.delete_cookie(GOOGLE_SESSION_COOKIE, path="/")
-    return response
-
-
-demo.queue(
-    max_size=config.QUEUE_MAX_SIZE,
-    default_concurrency_limit=config.QUEUE_CONCURRENCY_LIMIT,
-)
-app = gr.mount_gradio_app(
-    FASTAPI_APP, demo, path="/",
-    theme=THEME, css=CSS, js=THEME_JS, head=THEME_HEAD,
-)
-
-
 def _authenticate(username: str, password: str) -> bool:
     """Gradio login callback backed by PBKDF2 + lockout + audit logging."""
     manager = auth_mod.get_auth_manager()
@@ -2370,7 +2196,12 @@ def _authenticate(username: str, password: str) -> bool:
 def main() -> None:
     validate_startup()
     port = int(os.environ.get("PORT", 7860))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    demo.queue(
+        max_size=config.QUEUE_MAX_SIZE,
+        default_concurrency_limit=config.QUEUE_CONCURRENCY_LIMIT,
+    )
+    demo.launch(server_name="0.0.0.0", server_port=port, share=False,
+                theme=THEME, css=CSS, js=THEME_JS, head=THEME_HEAD)
 
 
 if __name__ == "__main__":

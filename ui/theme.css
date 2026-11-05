@@ -407,9 +407,14 @@ html[data-theme="light"][data-accent="amber"] {
              display:flex; align-items:center; justify-content:center;
              font-weight:800; color:var(--hr-white); font-size:1.05rem; letter-spacing:-0.5px;
              box-shadow: var(--hr-shadow-accent);}
+/* Solid, always-visible title. (The old gradient-clipped text could render
+   fully transparent in some browsers/Gradio builds, hiding the heading.) */
 #header-text h1 {font-size: 1.85rem; font-weight: 800; margin:0; line-height:1.15;
-            background: var(--hr-accent-grad-text);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;}
+            color: var(--hr-text-strong) !important;
+            -webkit-text-fill-color: var(--hr-text-strong) !important;
+            background: none !important;
+            -webkit-background-clip: border-box !important; background-clip: border-box !important;
+            opacity: 1; visibility: visible;}
 #header-text p {color: var(--hr-text-faint); font-size: 0.88rem; margin:2px 0 0 0;}
 #badges {display:flex; gap:8px; justify-content:center; margin: 10px 0 4px 0; flex-wrap:wrap;}
 .pill {font-size:0.72rem; padding:4px 11px; border-radius:var(--hr-radius-pill); color:var(--hr-accent-soft);
