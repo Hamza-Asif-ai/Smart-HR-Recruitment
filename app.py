@@ -42,6 +42,7 @@ from src import exporters
 from src import extractor as extractor_mod
 from src import guardrails as guardrails_mod
 from src import phase3_runner
+from src import role_match
 from src import runtime
 from src import scorecard
 from src import skills as skills_mod
@@ -281,6 +282,17 @@ REC_CHIP = {
 }
 
 
+def _conf_text(conf):
+    """Confidence is stored as a 0-1 fraction; show it as a percentage ('100%')."""
+    try:
+        value = float(conf)
+    except (TypeError, ValueError):
+        return "N/A"
+    if value <= 1.0:
+        value *= 100
+    return f"{value:.0f}%"
+
+
 def render_candidate_table(ranked):
     rows_html = []
     for c in ranked:
@@ -323,7 +335,7 @@ def render_candidate_table(ranked):
                 <div class="match-bar-bg"><div class="match-bar-fill" style="width:{pct}%;"></div></div>
                 <div class="match-pct">{pct}%</div>
               </div>
-              <div style="font-size:0.75rem; color:#a5b4fc;">{pct}% Match · {conf}% Conf · {_html.escape(str(mode))}</div>
+              <div style="font-size:0.75rem; color:#a5b4fc;">{pct}% Match · {_conf_text(conf)} Conf · {_html.escape(str(mode))}</div>
             </div>
           </td>
           <td style="white-space:nowrap; {exp_style}">{exp_txt}</td>
@@ -390,61 +402,53 @@ def _disambiguated_labels(names_full):
     return labels
 
 
-_CHART_BG = "#f8fafc"
-_CHART_TEXT = "#1e293b"
-_CHART_MUTED = "#94a3b8"
-_CHART_GRID = "#cbd5e1"
-_CHART_BAR = "#4f46e5"
-_CHART_LINE = "#be123c"
-
-
+# Dark chart palette (matches the dashboard cards).
 def make_score_chart(ranked):
     n = max(len(ranked), 1)
     names = _disambiguated_labels([c["name"] for c in ranked])
     scores = [c["match_percent"] for c in ranked]
     threshold = config.SHORTLIST_THRESHOLD
-    colors = [_CHART_BAR if s >= threshold else _CHART_MUTED for s in scores]
+    colors = ["#a855f7" if s >= threshold else "#3f3f52" for s in scores]
 
-    fig, ax = plt.subplots(figsize=(7.6, max(3.6, n * 0.34)), facecolor=_CHART_BG)
-    ax.set_facecolor(_CHART_BG)
+    fig, ax = plt.subplots(figsize=(7.6, max(3.6, n * 0.34)), facecolor="#12121c")
+    ax.set_facecolor("#12121c")
     bars = ax.barh(names[::-1], scores[::-1], color=colors[::-1], height=0.58)
-    ax.axvline(threshold, color=_CHART_LINE, linestyle="--", linewidth=1, alpha=0.8)
-    ax.text(threshold + 1, n - 0.5, f"{threshold:.0f}% shortlist line",
-            color=_CHART_LINE, fontsize=8)
+    ax.axvline(threshold, color="#f472b6", linestyle="--", linewidth=1, alpha=0.7)
+    ax.text(threshold + 1, n - 0.5, f"{threshold:.0f}% shortlist line", color="#f472b6", fontsize=8)
     ax.set_xlim(0, 108)
-    ax.set_xlabel("Match %", color=_CHART_TEXT, fontsize=9)
-    ax.tick_params(colors=_CHART_TEXT, labelsize=8.5)
+    ax.set_xlabel("Match %", color="#c9c9dd", fontsize=9)
+    ax.tick_params(colors="#c9c9dd", labelsize=8.5)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.grid(axis="x", color=_CHART_GRID, linewidth=0.6)
+    ax.grid(axis="x", color="#232336", linewidth=0.6)
     ax.set_axisbelow(True)
     for bar, score in zip(bars, scores[::-1]):
         ax.text(bar.get_width() + 1.5, bar.get_y() + bar.get_height() / 2,
-                 f"{score:.0f}%", va="center", color=_CHART_TEXT, fontsize=8)
+                 f"{score:.0f}%", va="center", color="#e9e9f5", fontsize=8)
     fig.tight_layout()
     return fig
 
 
 def make_skills_chart(top_skills):
     if not top_skills:
-        fig, ax = plt.subplots(figsize=(6, 4), facecolor=_CHART_BG)
-        ax.set_facecolor(_CHART_BG)
-        ax.text(0.5, 0.5, "No skill data", ha="center", color=_CHART_TEXT)
+        fig, ax = plt.subplots(figsize=(6, 4), facecolor="#12121c")
+        ax.set_facecolor("#12121c")
+        ax.text(0.5, 0.5, "No skill data", ha="center", color="#8b8ba7")
         ax.axis("off")
         return fig
     labels, counts = zip(*top_skills)
-    fig, ax = plt.subplots(figsize=(7.2, 4.4), facecolor=_CHART_BG)
-    ax.set_facecolor(_CHART_BG)
-    bars = ax.bar(labels, counts, color=_CHART_BAR, width=0.6)
-    ax.tick_params(colors=_CHART_TEXT, labelsize=8.5, rotation=25)
-    ax.set_ylabel("Candidates", color=_CHART_TEXT, fontsize=9)
+    fig, ax = plt.subplots(figsize=(7.2, 4.4), facecolor="#12121c")
+    ax.set_facecolor("#12121c")
+    bars = ax.bar(labels, counts, color="#6366f1", width=0.6)
+    ax.tick_params(colors="#c9c9dd", labelsize=8.5, rotation=25)
+    ax.set_ylabel("Candidates", color="#c9c9dd", fontsize=9)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.grid(axis="y", color=_CHART_GRID, linewidth=0.6)
+    ax.grid(axis="y", color="#232336", linewidth=0.6)
     ax.set_axisbelow(True)
     for bar, c in zip(bars, counts):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.15,
-                 str(c), ha="center", color=_CHART_TEXT, fontsize=8.5)
+                 str(c), ha="center", color="#e9e9f5", fontsize=8.5)
     fig.tight_layout()
     return fig
 
@@ -1089,7 +1093,7 @@ def render_application_email_cards(candidates):
           <div class="email-body" style="max-height:260px; overflow-y:auto;">{_html.escape(body_text)}</div>
           <div style="margin-top:10px;">
             <span class="chip {cls}">{label}</span>
-            <span class="match-pct" style="margin-left:8px;">{c['match_percent']}% match · {conf}% conf · {mode}</span>
+            <span class="match-pct" style="margin-left:8px;">{c['match_percent']}% match · {_conf_text(conf)} conf · {mode}</span>
             {review_html}
           </div>
           {hint_html}
@@ -1422,7 +1426,7 @@ def _recommendation_for(match):
 
 def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text,
                                min_years, use_coordinator=False, blind_mode=False,
-                               request: gr.Request = None, limit=60):
+                               request: gr.Request = None, limit=None):
     """Scan Gmail over IMAP and run every candidate through the Phase 3 blocks.
 
     The LLM is confined to quote-verified extraction. Scoring, review flags,
@@ -1450,12 +1454,16 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     requirements = build_custom_requirements(position, skills_text, nice_text, min_years)
     wanted = requirements["required_skills"] + requirements["nice_to_have"]
     try:
-        scan_limit = max(1, min(int(limit or 60), config.IMAP_SCAN_LIMIT))
+        scan_limit = max(1, min(int(limit or config.IMAP_SCAN_LIMIT), config.IMAP_SCAN_LIMIT))
     except (TypeError, ValueError):
-        scan_limit = min(60, config.IMAP_SCAN_LIMIT)
+        scan_limit = config.IMAP_SCAN_LIMIT
 
     candidates = []
     total_found = 0
+    role_excluded = 0
+    duplicate_count = 0
+    other_roles = []
+    seen_senders = set()
     resume_texts = {}
     validated_profiles = {}
     hidden_reports = {}
@@ -1469,7 +1477,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     try:
         imap = _imap_connect(gmail_address, app_password)
         with runtime.QUEUE_GATE.slot(timeout=30):
-            position_words = _position_words(requirements["title"])
             ids = _imap_message_ids(imap, scan_limit)
             for msg_id in reversed(ids):
                 raw = _imap_fetch_raw(imap, msg_id)
@@ -1486,10 +1493,13 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                     run_ctx.budget.consume()
                     continue
                 total_found += 1
-                # The position itself must actually be mentioned in the email (subject or
-                # body) — e.g. "Software Engineer" applicants only, not every applicant who
-                # happens to share a skill or two with the role.
-                if position_words and not all(w in blob for w in position_words):
+                # The role is read from the email subject (body only if the subject names
+                # none) and compared word-for-word with the searched position.
+                role_ok, detected_role = role_match.role_matches(
+                    requirements["title"], subject, body)
+                if not role_ok:
+                    role_excluded += 1
+                    other_roles.append(detected_role)
                     run_ctx.budget.consume()
                     continue
 
@@ -1497,6 +1507,15 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                 from_name = _decode_mime_header(from_name)
                 resume_text = attachment_text.strip() if attachment_text.strip() else body
                 source_id = (from_addr or f"message-{msg_id}")[:255]
+                # Newest message is read first, so a repeat application from the same
+                # address (same role) is ignored in favour of the latest one.
+                sender_key = (from_addr or "").strip().lower()
+                if sender_key:
+                    if sender_key in seen_senders:
+                        duplicate_count += 1
+                        run_ctx.budget.consume()
+                        continue
+                    seen_senders.add(sender_key)
 
                 result = phase3_runner.analyze_resume_text(
                     resume_text,
@@ -1533,6 +1552,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                     result["recommendation"] = _recommendation_for(result["match_percent"])
                 result["_min_years"] = requirements["min_years"]
                 result["_subject"] = subject
+                result["_role"] = detected_role
                 result["_attachment"] = attachment_name
                 result["_body"] = body.strip()
                 result["_date"] = msg.get("Date", "")
@@ -1608,18 +1628,25 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                 "Coordinator not configured; deterministic Phase 3 results kept."
             )
 
-    unrelated_count = total_found - len(candidates)
+    unrelated_count = role_excluded
 
     if not candidates:
         if total_found == 0:
             msg = '<div class="empty-state">No candidate application emails detected in this inbox.</div>'
         else:
+            seen_roles = role_match.summarize_roles(other_roles)
             msg = (f'<div class="status-line err">⚠ Found {total_found} application email(s) in the inbox, but none '
-                   f'mention "{_html.escape(requirements["title"])}" — they look like applications for a '
-                   f'different role.</div>')
+                   f'are for "{_html.escape(requirements["title"])}". Roles found in the subjects: '
+                   f'{_html.escape(seen_roles)}.</div>')
         return _stats_html_for([]), msg, render_candidate_table([]), make_score_chart([]), make_skills_chart([]), gr.update(choices=[], value=[]), empty_state, ""
 
-    candidates.sort(key=lambda c: c["match_percent"], reverse=True)
+    # Best match first; ties go to higher confidence, then more experience, then the
+    # newer email (the scan is newest-first and Python's sort is stable).
+    candidates.sort(key=lambda c: (
+        -(c.get("match_percent") or 0),
+        -(c.get("confidence", c.get("_confidence", 0)) or 0),
+        -(c.get("experience_years") or 0),
+    ))
     for i, c in enumerate(candidates, 1):
         c["rank"] = i
 
@@ -1635,6 +1662,8 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     req_txt = ", ".join(requirements["required_skills"])
     excluded_note = (f' · {unrelated_count} application(s) for a different role excluded'
                       if unrelated_count else '')
+    if duplicate_count:
+        excluded_note += f' · {duplicate_count} repeat application(s) from the same sender ignored (latest kept)'
     review_count = sum(1 for c in candidates if c.get("needs_human_review"))
     hidden_count = sum(1 for c in candidates if c.get("hidden_text_suspected"))
     budget_line = phase3_runner.summarize_budget(run_ctx)
