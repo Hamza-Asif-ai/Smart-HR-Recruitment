@@ -1134,15 +1134,44 @@ _POSITION_STOPWORDS = {
     "position", "role", "job", "title", "the", "a", "an", "of", "for", "and", "at", "in", "to",
     "we", "are", "is", "hiring", "looking", "opening", "vacancy", "senior", "junior", "lead",
     "sr", "jr", "i", "ii", "iii", "iv", "intern", "internship", "opportunity",
+    "developer", "engineer", "specialist", "manager", "analyst", "consultant", "architect",
+    "staff", "principal", "head", "director", "associate",
+}
+
+_POSITION_SYNONYMS = {
+    "ai": ("artificial", "intelligence"),
+    "artificial": ("ai",),
+    "intelligence": ("ai",),
+    "ml": ("machine", "learning"),
+    "machine": ("ml",),
+    "learning": ("ml",),
 }
 
 
-# FALLBACK ONLY
 def _position_words(position):
-    """'Senior Software Engineer' -> ['software', 'engineer'] — the words that actually
-    identify the role, stripped of seniority/filler words that would over-restrict matching."""
-    words = re.findall(r"[a-z0-9]+", (position or "").lower())
-    return [w for w in words if w not in _POSITION_STOPWORDS and len(w) > 1]
+    """Core role words, stripped of generic titles and expanded for fuzzy matching.
+
+    'Senior AI/ML Engineer' -> ['ai', 'artificial', 'intelligence', 'ml', 'machine', 'learning']"""
+    core = []
+    for w in re.findall(r"[a-z0-9]+", (position or "").lower()):
+        if w in _POSITION_STOPWORDS or len(w) <= 1:
+            continue
+        for candidate in (w,) + _POSITION_SYNONYMS.get(w, ()):
+            if candidate not in core:
+                core.append(candidate)
+    return core
+
+
+def _fuzzy_position_match(position, subject, body):
+    """True if the email mentions ANY core word of the position (not all of them)."""
+    core = _position_words(position)
+    if not core:
+        return True
+    haystack = f"{subject} {body}".lower()
+    return any(
+        re.search(r"(?<![a-z0-9])" + re.escape(w) + r"(?![a-z0-9])", haystack)
+        for w in core
+    )
 
 
 _AMBIGUOUS_SKILLS = {"go", "r", "c"}
@@ -1497,6 +1526,10 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                 # none) and compared word-for-word with the searched position.
                 role_ok, detected_role = role_match.role_matches(
                     requirements["title"], subject, body)
+                if not role_ok:
+                    role_ok = _fuzzy_position_match(requirements["title"], subject, body)
+                    if role_ok and not detected_role:
+                        detected_role = requirements["title"]
                 if not role_ok:
                     role_excluded += 1
                     other_roles.append(detected_role)
