@@ -14,8 +14,9 @@ With a Gemini key, `run_phase3_pipeline()` performs quote-verified extraction
 before deterministic scoring. Any model failure or budget exhaustion degrades
 to the regex path with a visible banner. **No model can send email.**
 
-Phase 5 adds read-only Gmail OAuth, Google Calendar free/busy slot proposals
-with `.ics` attachments, explainable candidate score cards, persistent multi-job
+Phase 5 adds Gmail inbox access with a **Gmail App Password** (IMAP), Brevo
+email delivery, optional Google Calendar free/busy slot proposals with `.ics`
+attachments, explainable candidate score cards, persistent multi-job
 workspaces, and CSV exports. Deployment artifacts (`Dockerfile`, `render.yaml`)
 and a ruff lint gate are included.
 
@@ -72,8 +73,9 @@ and a ruff lint gate are included.
 
 8. **Explainability and scheduling** — score cards surface the verified quotes
    behind each decision, "why not shortlisted" lists the actual blockers, free
-   slots come from Calendar free/busy, and invitations carry a standard `.ics`
-   file attached through Brevo.
+   slots come from Calendar free/busy when it is configured (otherwise from
+   built-in business-hour slots), and invitations carry a standard `.ics` file
+   attached through Brevo.
 
 ---
 
@@ -129,8 +131,6 @@ smart-hr-recruitment/
 │   ├── approval.py                     ← human approval queue + mailer gate
 │   ├── budget.py                       ← per-run budgets + degradation
 │   ├── memory.py                       ← HMAC-keyed advisory SQLite memory
-│   ├── google_oauth.py                 ← OAuth consent, refresh, token store
-│   ├── gmail_api.py                    ← read-only Gmail REST client
 │   ├── calendar_api.py                 ← Calendar free/busy + `.ics` builder
 │   ├── scorecard.py                    ← evidence cards + rejection reasons
 │   ├── workspace.py                    ← persistent multi-job workspace
@@ -209,14 +209,18 @@ hashes with `python -m src.auth --hash-password 'your-password'`. For local
 development only, `HR_ALLOW_NO_AUTH=1` disables login and binds the server to
 `127.0.0.1`. See [SECURITY.md](SECURITY.md) for roles and audit settings.
 
-Connect Gmail/Calendar once with the read-only OAuth flow:
+Gmail inbox access uses a **Gmail App Password** entered directly in the UI:
 
-```bash
-python -m src.google_oauth
-```
+1. Turn on 2-Step Verification for your Google account.
+2. Open `myaccount.google.com/apppasswords` and create an App Password.
+3. In the app, open **📧 Gmail inbox access** and enter your Gmail address and
+   the 16-character App Password. Credentials stay in the browser session and
+   are never written to disk.
 
-The refresh token is stored in the git-ignored `data/output/google_oauth_token.json`
-unless you supply `GOOGLE_OAUTH_REFRESH_TOKEN`.
+The **Applications** and **Replies** tabs read the inbox over IMAP with these
+credentials. Outgoing invitations are sent through the **Brevo** transactional
+email API; enter a verified sender email and Brevo API key under
+**📧 Brevo sender details**. No Gmail password is ever stored or logged.
 
 ### Docker and Render
 
@@ -226,8 +230,10 @@ docker run -p 10000:10000 -e HR_USERS='...' smart-hr-recruitment
 ```
 
 `HR_USERS` is required in containers so the app binds publicly with login
-enabled. `render.yaml` provisions the same image on Render; set the OAuth and
-Gemini secrets in the Render dashboard.
+enabled. `render.yaml` provisions the same image on Render; set `HR_USERS` and
+the Gemini secret in the Render dashboard. Gmail address, App Password, sender
+email, and Brevo key are entered in the UI at runtime and are never stored on
+the server.
 
 Optional environment variables:
 
@@ -247,17 +253,14 @@ Optional environment variables:
   (default 75 / 55, validated 0–100 and review ≤ shortlist).
 - `INTERVIEW_TIMEZONE` — IANA timezone for proposed slots (default
   `Asia/Kolkata`; falls back to UTC if invalid).
-- `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` — Google OAuth client
-  for the read-only Gmail and Calendar scopes.
-- `GOOGLE_OAUTH_REDIRECT_URI` — callback URL registered with Google.
-- `GOOGLE_OAUTH_REFRESH_TOKEN` — deployment-friendly alternative to the local
-  token file.
 - `CALENDAR_ID` / `CALENDAR_LOOKAHEAD_DAYS` / `INTERVIEW_SLOT_MINUTES` —
-  calendar used for free/busy, lookahead window, and slot length.
+  optional calendar free/busy calendar id, lookahead window, and slot length.
+  When Calendar is not configured, the app uses built-in business-hour slots.
 - `HR_WORKSPACE_FILE` — path to the saved multi-job workspace JSON.
 
-The Brevo API key is entered in the UI at runtime and is never written to disk.
-Use test accounts only.
+The Gmail address, Gmail App Password, sender email, and Brevo API key are
+entered in the UI at runtime and are never written to disk. Use test accounts
+only.
 
 ---
 

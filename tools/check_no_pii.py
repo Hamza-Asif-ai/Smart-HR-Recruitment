@@ -136,6 +136,22 @@ def _is_phone_like(match: str) -> bool:
     return True
 
 
+def _inside_svg_markup(text: str, offset: int) -> bool:
+    """Return True when ``offset`` sits on an inline SVG element line.
+
+    SVG ``<path d="...">`` data is a long run of coordinates (for example
+    ``20.447 20.452h-3.554``) that the generic phone regex mistakes for a phone
+    number. SVG path data is layout geometry, not candidate contact data, so it
+    is skipped for the phone rule only; email and secret rules still apply.
+    """
+    line_start = text.rfind("\n", 0, offset) + 1
+    line_end = text.find("\n", offset)
+    if line_end == -1:
+        line_end = len(text)
+    line = text[line_start:line_end].lower()
+    return "<svg" in line or "<path" in line
+
+
 def _is_placeholder_secret(value: str) -> bool:
     lowered = value.lower()
     markers = (
@@ -164,6 +180,8 @@ def scan_text(text: str, label: str, start_line: int = 1) -> Iterator[Issue]:
     for match in PHONE_RE.finditer(text):
         value = match.group(0)
         if not _is_phone_like(value):
+            continue
+        if _inside_svg_markup(text, match.start()):
             continue
         if ALLOWED_PHONE_TOKEN not in re.sub(r"\D", "", value):
             yield Issue(label, _line_of(text, match.start(), start_line), "phone", "missing 555 exchange")

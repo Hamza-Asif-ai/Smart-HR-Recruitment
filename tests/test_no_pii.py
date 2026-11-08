@@ -36,6 +36,12 @@ def test_iso_date_is_not_treated_as_phone():
     assert _rules("deadline 2026-06-30") == set()
 
 
+def test_svg_path_data_is_not_treated_as_phone():
+    svg = '<svg viewBox="0 0 24 24"><path d="M20.447 20.452h-3.554v-5.569z"/></svg>'
+    assert _rules(svg) == set()
+    assert "phone" in _rules('call +1 (212) ' + "867-" + "5309")
+
+
 def test_secret_patterns_fail():
     fake_google = "AIza" + "A" * 35
     fake_github = "ghp_" + "a" * 36
