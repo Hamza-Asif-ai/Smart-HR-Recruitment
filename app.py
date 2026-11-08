@@ -1516,9 +1516,8 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                 subject = _decode_mime_header(msg.get("Subject", "") or "")
                 body = _extract_plain_body(msg)
                 attachment_name, attachment_text, hidden_report = _extract_attachment_data(msg)
-                blob = f"{subject} {body}".lower()
                 has_attachment = _find_attachment_name(msg) is not None
-                if not (has_attachment or any(k in blob for k in _APPLICATION_KEYWORDS)):
+                if not has_attachment:
                     run_ctx.budget.consume()
                     continue
                 total_found += 1
