@@ -105,10 +105,10 @@ def test_any_of_cloud_group_is_satisfied_by_one_provider():
 
 # d) One env-driven config -------------------------------------------------------------
 def test_thresholds_are_shared_by_scorer_orchestrator_and_agents():
-    assert config.SHORTLIST_THRESHOLD == 75.0
+    assert config.SHORTLIST_THRESHOLD == 60.0
     assert config.REVIEW_THRESHOLD == 55.0
-    assert skills.recommendation_for_score(74.9) == "Possible match - review"
-    assert skills.recommendation_for_score(75.0) == "Strong match - shortlist"
+    assert skills.recommendation_for_score(59.9) == "Possible match - review"
+    assert skills.recommendation_for_score(60.0) == "Strong match - shortlist"
     assert f"{config.SHORTLIST_THRESHOLD:.0f}%" in agents.SCHEDULER_AGENT_INSTRUCTION
 
 

@@ -432,14 +432,14 @@ def candidate_scorer_skill(
     """Score a parsed candidate against parsed JD requirements.
 
     Weighted model:
-        * 50% required-skill coverage (half listed, half demonstrated in experience)
+        * 70% required-skill coverage (half listed, half demonstrated in experience)
         * 10% nice-to-have coverage
-        * 25% experience match
+        * 10% experience match
         *  5% education match
-        * 10% evidence coverage (required skills found in the experience block)
+        *  5% evidence coverage (required skills found in the experience block)
 
-    The evidence split is what stops a resume that merely lists every keyword
-    from outranking a candidate who can show the same skills in real roles.
+    Required-skill coverage is the dominant signal so candidates who match the
+    role's must-have skills rank above otherwise-generic profiles.
     Returns a dict with match_percent (0-100) and an explainable breakdown.
     """
     req_skills = set(requirements.get("required_skills", []))
@@ -483,11 +483,11 @@ def candidate_scorer_skill(
     edu_score = 1.0 if candidate.get("education") else 0.0
 
     match = 100.0 * (
-        0.50 * skill_score
+        0.70 * skill_score
         + NICE_TO_HAVE_WEIGHT * nice_cov
-        + 0.25 * exp_score
+        + 0.10 * exp_score
         + 0.05 * edu_score
-        + 0.10 * evidence_cov
+        + 0.05 * evidence_cov
     )
     match = round(match, 1)
 

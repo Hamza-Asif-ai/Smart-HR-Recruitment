@@ -1453,14 +1453,11 @@ def _recommendation_for(match):
 
 
 def analyze_inbox_applications(gmail_address, app_password, position, skills_text, nice_text,
-                               min_years, use_coordinator=False, blind_mode=False,
-                               request: gr.Request = None, limit=None):
-    """Scan Gmail over IMAP and run every candidate through the Phase 3 blocks.
+                               min_years, request: gr.Request = None, limit=None):
+    """Scan Gmail over IMAP and run every candidate through the deterministic pipeline.
 
     The LLM is confined to quote-verified extraction. Scoring, review flags,
-    ranking and drafting are deterministic. If the ADK coordinator is enabled
-    and available it runs over the already-quarantined profiles; any failure
-    falls back to deterministic results with a visible banner.
+    ranking and drafting are deterministic.
     """
     empty_state = {"title": "", "candidates": []}
     empty_stats = _stats_html_for([])
@@ -1492,10 +1489,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     duplicate_count = 0
     other_roles = []
     seen_senders = set()
-    resume_texts = {}
-    validated_profiles = {}
-    hidden_reports = {}
-    coordinator_note = ""
     model_state = phase3_runner.model_status()
     llm_enabled = bool(model_state.agentic)
     selected_model = model_state.model or config.get_gemini_model()
@@ -1564,15 +1557,8 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                     llm_enabled=llm_enabled,
                     hidden_report=hidden_report,
                     include_profile=True,
-                    blind=bool(blind_mode),
-                    known_names=[from_name] if (blind_mode and from_name) else None,
                 )
-                validated_profile = result.pop("_profile", None)
-                if validated_profile is not None:
-                    validated_profiles[source_id] = validated_profile
-                resume_texts[source_id] = resume_text
-                if hidden_report is not None:
-                    hidden_reports[source_id] = hidden_report
+                result.pop("_profile", None)
 
                 if from_name:
                     result["name"] = from_name
@@ -1610,60 +1596,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     finally:
         if imap is not None:
             _imap_logout(imap)
-
-    if use_coordinator and candidates:
-        if phase3_runner.coordinator_available() and not run_ctx.budget.degraded:
-            try:
-                identity = _identity_from_request(request)[0]
-                coordinator_result = phase3_runner.run_coordinator(
-                    requirements=requirements,
-                    resume_texts=resume_texts,
-                    source_ids=list(resume_texts.keys()),
-                    validated_profiles=validated_profiles,
-                    hidden_reports=hidden_reports,
-                    role=identity.role.value,
-                    model=selected_model,
-                    run_context=run_ctx,
-                    memory=memory,
-                    jd_filename="",
-                )
-                by_source = {c.get("source_id"): c for c in candidates}
-                merged = []
-                for scored in coordinator_result.get("ranked_candidates", []):
-                    base = by_source.get(scored.get("source_id"))
-                    if base is None:
-                        merged.append(scored)
-                        continue
-                    meta = {k: v for k, v in base.items() if k.startswith("_")}
-                    item = {**scored, **meta}
-                    item["name"] = base.get("name", item.get("name"))
-                    item["email"] = base.get("email", item.get("email"))
-                    item["evidence"] = base.get("evidence", item.get("evidence"))
-                    item["_confidence"] = item.get("confidence", item.get("_confidence", 0))
-                    if not requirements["nice_to_have"]:
-                        item["match_percent"] = min(
-                            100.0,
-                            round(item["match_percent"] / (1 - skills_mod.NICE_TO_HAVE_WEIGHT), 1),
-                        )
-                        item["recommendation"] = _recommendation_for(item["match_percent"])
-                    merged.append(item)
-                if merged:
-                    candidates = merged
-                    coordinator_note = (
-                        f"ADK coordinator reviewed {len(merged)} candidate(s) "
-                        f"({coordinator_result.get('run_id', '')[:8]})."
-                    )
-                else:
-                    coordinator_note = "Coordinator returned no usable results; deterministic scoring kept."
-            except Exception as exc:  # noqa: BLE001 - always keep deterministic results
-                coordinator_note = (
-                    f"Coordinator unavailable ({type(exc).__name__}); "
-                    "deterministic Phase 3 results kept."
-                )
-        else:
-            coordinator_note = (
-                "Coordinator not configured; deterministic Phase 3 results kept."
-            )
 
     unrelated_count = role_excluded
 
@@ -1708,15 +1640,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
         f"Mode: {model_state.mode} ({_html.escape(model_state.message)})"
         if model_state.message else f"Mode: {model_state.mode}"
     )
-    coordinator_html = (
-        f'<div class="status-line info">🤖 {_html.escape(coordinator_note)}</div>'
-        if coordinator_note else ""
-    )
-    blind_html = (
-        '<div class="status-line info">🕶 Blind mode: candidate names and contact '
-        'details were masked before extraction and scoring.</div>'
-        if blind_mode else ""
-    )
     review_html = (
         f'<div class="status-line info">🧑‍⚖️ {review_count} candidate(s) need human review · '
         f'{hidden_count} hidden-text suspect(s).</div>'
@@ -1728,7 +1651,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
               f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}–{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>'
               f'<div class="status-line info">{mode_note}</div>'
               f'<div class="status-line info">💸 {_html.escape(budget_line)}</div>'
-              f'{blind_html}{coordinator_html}{review_html}')
+              f'{review_html}')
     state = {"title": requirements["title"], "candidates": candidates}
     return (_stats_html_for(candidates), status, render_candidate_table(candidates),
             make_score_chart(candidates), make_skills_chart(coverage),
@@ -2056,14 +1979,6 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
                 "other tabs."
             )
             fetch_apps_btn = gr.Button("🔍  Scan Inbox for Candidate Applications", variant="primary")
-            agentic_mode_in = gr.Checkbox(
-                label="Use Phase 3 ADK coordinator (falls back to deterministic if unavailable)",
-                value=bool(config.get_gemini_api_key() and config.get_gemini_model()),
-            )
-            blind_mode_in = gr.Checkbox(
-                label="Blind mode (mask names before extraction and scoring)",
-                value=bool(config.BLIND_MODE_DEFAULT),
-            )
             applications_status = gr.HTML()
             applications_cards_out = gr.HTML()
 
@@ -2133,7 +2048,7 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
         inputs=[gmail_email_in, gmail_app_password_in, position_in, skills_in, nice_in,
-                min_exp_in, agentic_mode_in, blind_mode_in],
+                min_exp_in],
         outputs=[stats_out, applications_status, table_out, score_plot, skills_plot, candidate_checkbox, inbox_state, applications_cards_out],
     )
     inbox_state.change(

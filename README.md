@@ -247,10 +247,8 @@ Optional environment variables:
 - `HR_MEMORY_DB` / `HR_MEMORY_HMAC_KEY` — advisory memory path and key.
 - `HR_APPROVAL_QUEUE_MAX_SIZE` — bounded pending-draft queue.
 - `HR_DATA_ROOT` — points at a different data directory.
-- `BLIND_MODE=1` — starts the app with blind screening enabled (names and
-  direct contact details are masked before extraction/scoring).
 - `SHORTLIST_THRESHOLD` / `REVIEW_THRESHOLD` — shortlist and review cut-offs
-  (default 75 / 55, validated 0–100 and review ≤ shortlist).
+  (default 60 / 55, validated 0–100 and review ≤ shortlist).
 - `INTERVIEW_TIMEZONE` — IANA timezone for proposed slots (default
   `Asia/Kolkata`; falls back to UTC if invalid).
 - `CALENDAR_ID` / `CALENDAR_LOOKAHEAD_DAYS` / `INTERVIEW_SLOT_MINUTES` —

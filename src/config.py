@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-DEFAULT_SHORTLIST_THRESHOLD = 75.0
+DEFAULT_SHORTLIST_THRESHOLD = 60.0
 DEFAULT_REVIEW_THRESHOLD = 55.0
 DEFAULT_INTERVIEW_TIMEZONE = "Asia/Kolkata"
 
@@ -126,7 +126,6 @@ MEMORY_HMAC_KEY = os.environ.get(
 ).strip()
 APPROVAL_QUEUE_MAX_SIZE = _env_int("HR_APPROVAL_QUEUE_MAX_SIZE", 100,
                                    minimum=1, maximum=10_000)
-BLIND_MODE_DEFAULT = os.environ.get("BLIND_MODE", "").strip() == "1"
 
 # --------------------------------------------------------------------------- #
 # Phase 5: Gmail OAuth, Calendar availability, and job workspaces
@@ -264,7 +263,6 @@ __all__ = [
     "MEMORY_DB_PATH",
     "MEMORY_HMAC_KEY",
     "APPROVAL_QUEUE_MAX_SIZE",
-    "BLIND_MODE_DEFAULT",
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
     "OAUTH_REDIRECT_URI",
