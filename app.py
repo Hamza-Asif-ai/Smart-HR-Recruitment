@@ -1026,8 +1026,8 @@ def _find_attachment_name(msg):
     return None
 
 
-def _extract_attachment_data(msg):
-    """Return ``(filename, text, hidden_report)`` for the first resume attachment."""
+def _extract_attachment_data(msg, allowed_suffixes=(".pdf", ".docx", ".txt", ".rtf")):
+    """Return ``(filename, text, hidden_report)`` for the first allowed attachment."""
     if not msg.is_multipart():
         return None, "", None
     for part in msg.walk():
@@ -1036,8 +1036,7 @@ def _extract_attachment_data(msg):
             continue
         filename = os.path.basename(str(part.get_filename() or ""))[:255]
         low = filename.lower()
-        if not low.endswith((".pdf", ".docx", ".txt", ".rtf")):
-            # legacy binary .doc needs extra libraries; fall back to the email body instead.
+        if not low.endswith(allowed_suffixes):
             continue
         payload = _attachment_payload(part)
         if not payload:
@@ -1514,19 +1513,25 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                     continue
                 msg = email_lib.message_from_bytes(raw)
                 subject = _decode_mime_header(msg.get("Subject", "") or "")
+                if "application" not in subject.lower():
+                    run_ctx.budget.consume()
+                    continue
+                if re.match(r"^\s*(?:re\s*:|fwd\s*:|fw\s*:)", subject, re.I):
+                    run_ctx.budget.consume()
+                    continue
                 body = _extract_plain_body(msg)
-                attachment_name, attachment_text, hidden_report = _extract_attachment_data(msg)
-                has_attachment = _find_attachment_name(msg) is not None
-                if not has_attachment:
+                attachment_name, attachment_text, hidden_report = _extract_attachment_data(
+                    msg, allowed_suffixes=(".pdf", ".docx"))
+                if not attachment_name:
                     run_ctx.budget.consume()
                     continue
                 total_found += 1
-                # The role is read from the email subject (body only if the subject names
-                # none) and compared word-for-word with the searched position.
+                # The role is read from the email subject only; body text never
+                # decides whether an email is an application.
                 role_ok, detected_role = role_match.role_matches(
-                    requirements["title"], subject, body)
+                    requirements["title"], subject)
                 if not role_ok:
-                    role_ok = _fuzzy_position_match(requirements["title"], subject, body)
+                    role_ok = _fuzzy_position_match(requirements["title"], subject, "")
                     if role_ok and not detected_role:
                         detected_role = requirements["title"]
                 if not role_ok:
