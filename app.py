@@ -213,9 +213,9 @@ def _header_pills_html():
     """Header pills derived from live configuration, never hard-coded claims."""
     try:
         manager = auth_mod.get_auth_manager()
-        auth_pill = "🔒 RBAC secured" if manager.enabled else "🔓 Multi-Agent System"
+        auth_pill = "🔒 RBAC secured" if manager.enabled else "🤖 Multi-Agent System"
     except Exception:
-        auth_pill = "🔓 Multi-Agent System"
+        auth_pill = "🤖 Multi-Agent System"
     try:
         status = phase3_runner.model_status()
         agent_pill = "🧩 4 specialized agents" if status.agentic else "🧩 Deterministic pipeline"
