@@ -132,7 +132,7 @@ Optional tuning variables (sensible defaults are built in):
 | Variable | Default | Purpose |
 |---|---|---|
 | `SHORTLIST_THRESHOLD` | `75` | Minimum match % to shortlist |
-| `REVIEW_THRESHOLD` | `55` | Minimum match % for manual review |
+| `REVIEW_THRESHOLD` | `45` | Minimum match % for manual review |
 | `INTERVIEW_TIMEZONE` | `Asia/Kolkata` | IANA timezone for proposed slots |
 
 Set them the same way as `HR_DATA_ROOT` (for example

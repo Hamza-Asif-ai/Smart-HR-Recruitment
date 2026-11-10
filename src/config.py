@@ -10,8 +10,8 @@ import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-DEFAULT_SHORTLIST_THRESHOLD = 60.0
-DEFAULT_REVIEW_THRESHOLD = 55.0
+DEFAULT_SHORTLIST_THRESHOLD = 75.0
+DEFAULT_REVIEW_THRESHOLD = 45.0
 DEFAULT_INTERVIEW_TIMEZONE = "Asia/Kolkata"
 
 

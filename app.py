@@ -1648,7 +1648,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     status = (f'<div class="status-line ok">✅ Found {len(candidates)} relevant application(s), scored for '
               f'“{_html.escape(requirements["title"])}” · required: {_html.escape(req_txt)} · '
               f'min. experience: {requirements["min_years"]} yr(s){excluded_note}</div>'
-              f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}–{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>'
+              f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}-{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>'
               f'<div class="status-line info">{mode_note}</div>'
               f'<div class="status-line info">💸 {_html.escape(budget_line)}</div>'
               f'{review_html}')
