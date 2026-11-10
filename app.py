@@ -1756,17 +1756,10 @@ def _init_session(request: gr.Request = None):
     run_context = runtime.new_run_context()
     runtime.cleanup_temp_files()
     try:
-        record, _manager = _identity_from_request(request)
+        _identity_from_request(request)
     except AccessDeniedError:
-        return run_context, _denied_html()
-    status = phase3_runner.model_status()
-    css_class = "err" if status.degraded else "info"
-    banner = (
-        f'<div class="status-line {css_class}">Signed in as '
-        f'<b>{_html.escape(record.username)}</b> · role: {_html.escape(record.role.value)}'
-        f' · Phase 3: {_html.escape(status.mode)} — {_html.escape(status.message)}</div>'
-    )
-    return run_context, banner
+        return run_context
+    return run_context
 
 
 # --------------------------------------------------------------------------- #
@@ -1936,8 +1929,6 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
                 decline_reply_btn = gr.Button("❌ Decline", size="sm")
             replies_action_status = gr.HTML()
 
-    session_banner = gr.HTML()
-
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
         inputs=[gmail_email_in, gmail_app_password_in, position_in, skills_in, nice_in,
@@ -1994,8 +1985,7 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
     restore_default_btn.click(restore_default_text, inputs=None,
                               outputs=[saved_default_state, default_text_box, default_save_status])
     demo.load(load_saved_default, inputs=[saved_default_state], outputs=[default_text_box])
-    demo.load(_init_session, inputs=None,
-              outputs=[run_context_state, session_banner])
+    demo.load(_init_session, inputs=None, outputs=[run_context_state])
     invite_mode_in.change(lambda m: gr.update(visible=(m == "custom")),
                           inputs=[invite_mode_in], outputs=[custom_invite_box])
 
