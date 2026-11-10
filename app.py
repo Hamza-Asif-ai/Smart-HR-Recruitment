@@ -68,7 +68,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import gradio as gr
 
-import json
 os.environ.setdefault("HR_DATA_ROOT", "./data")
 
 
@@ -1367,65 +1366,6 @@ def _draft_invitation(candidate, position, company, recruiter, slot, body_templa
     }
 
 
-def _trace_entries(trace_state, run_context):
-    """Return this session's traces; never a process-wide singleton."""
-    if run_context is not None:
-        try:
-            return run_context.trace.get_traces(limit=1000)
-        except Exception:
-            return []
-    return list(trace_state or [])
-
-
-def update_trace_table(trace_state, run_context, request: gr.Request = None):
-    """Update trace table display from this session's trace state."""
-    if request is not None and _identity_from_request(request)[0].role != Role.ADMIN:
-        return []
-    traces = _trace_entries(trace_state, run_context)
-    if not traces:
-        return []
-
-    rows = []
-    for t in traces[-50:]:  # Show last 50
-        rows.append([
-            t.get("agent", ""),
-            t.get("action", ""),
-            t.get("tool", ""),
-            t.get("input_summary", "")[:80],
-            t.get("output_summary", "")[:80],
-            t.get("duration_ms", 0),
-            t.get("timestamp", ""),
-        ])
-    return rows
-
-
-def download_trace_json(trace_state, run_context, request: gr.Request = None):
-    """Download this session's trace as a JSON file (temp file tracked for cleanup)."""
-    if request is not None and _identity_from_request(request)[0].role != Role.ADMIN:
-        return None
-    data = _trace_entries(trace_state, run_context)
-    path = runtime.new_temp_file(suffix=".json")
-    try:
-        if run_context is not None:
-            payload = {
-                "run_id": run_context.trace.run_id,
-                "budget": run_context.budget.snapshot(),
-                "traces": data,
-            }
-        else:
-            payload = {"traces": data}
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-        return path
-    except Exception as e:  # noqa: BLE001 - never expose raw exception text
-        try:
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump({"error": safe_error(e)}, handle, indent=2)
-        except OSError:
-            pass
-        return path
-
-
 def _recommendation_for(match):
     return skills_mod.recommendation_for_score(match)
 
@@ -1558,9 +1498,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
                 result["_body"] = body.strip()
                 result["_date"] = msg.get("Date", "")
                 candidates.append(result)
-                run_ctx.trace.record("screener", "scored_application", "gmail",
-                                     input_summary="1 message",
-                                     output_summary=result["recommendation"])
     except runtime.QueueFullError:
         return _fail('<div class="status-line err">⚠ The server is busy. Try again shortly.</div>')
     except imaplib.IMAP4.error as ex:
@@ -1614,10 +1551,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     review_count = sum(1 for c in candidates if c.get("needs_human_review"))
     hidden_count = sum(1 for c in candidates if c.get("hidden_text_suspected"))
     budget_line = phase3_runner.summarize_budget(run_ctx)
-    mode_note = (
-        f"Mode: {model_state.mode} ({_html.escape(model_state.message)})"
-        if model_state.message else f"Mode: {model_state.mode}"
-    )
     review_html = (
         f'<div class="status-line info">🧑‍⚖️ {review_count} candidate(s) need human review · '
         f'{hidden_count} hidden-text suspect(s).</div>'
@@ -1627,7 +1560,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
               f'“{_html.escape(requirements["title"])}” · required: {_html.escape(req_txt)} · '
               f'min. experience: {requirements["min_years"]} yr(s){excluded_note}</div>'
               f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}-{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>'
-              f'<div class="status-line info">{mode_note}</div>'
               f'<div class="status-line info">💸 {_html.escape(budget_line)}</div>'
               f'{review_html}')
     state = {"title": requirements["title"], "candidates": candidates}
@@ -1820,25 +1752,21 @@ def forget_candidate_memory(selected_emails, inbox_state, request: gr.Request = 
 
 
 def _init_session(request: gr.Request = None):
-    """Create one run context per browser session and gate the dev panel."""
+    """Create one run context per browser session."""
     run_context = runtime.new_run_context()
     runtime.cleanup_temp_files()
     try:
         record, _manager = _identity_from_request(request)
     except AccessDeniedError:
-        return run_context, gr.update(visible=False), _denied_html()
-    is_admin = record.role == Role.ADMIN
+        return run_context, _denied_html()
     status = phase3_runner.model_status()
     css_class = "err" if status.degraded else "info"
     banner = (
         f'<div class="status-line {css_class}">Signed in as '
         f'<b>{_html.escape(record.username)}</b> · role: {_html.escape(record.role.value)}'
         f' · Phase 3: {_html.escape(status.mode)} — {_html.escape(status.message)}</div>'
-        f'<div class="status-line info">Run {run_context.trace.run_id[:8]} · '
-        f'budget {run_context.budget.remaining_calls} LLM call(s) · '
-        f'{run_context.budget.remaining_tokens} token(s) remaining</div>'
     )
-    return run_context, gr.update(visible=is_admin), banner
+    return run_context, banner
 
 
 # --------------------------------------------------------------------------- #
@@ -1857,7 +1785,6 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
         saved_default_state = gr.State("")
     inbox_state = gr.State({"title": "", "candidates": []})
     pending_drafts_state = gr.State([])
-    trace_state = gr.State([])
     run_context_state = gr.State(None)
     overrides_state = gr.State([])
     replies_action_state = gr.State({"replies_status": {}})
@@ -2009,19 +1936,7 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
                 decline_reply_btn = gr.Button("❌ Decline", size="sm")
             replies_action_status = gr.HTML()
 
-    with gr.Accordion("🔍 Developer Tools (Agent Trace)", open=False,
-                      visible=False) as dev_tools:
-        gr.Markdown("View agent execution traces for observability. Admin role only.")
-        session_banner = gr.HTML()
-        trace_table = gr.Dataframe(
-            headers=["Agent", "Action", "Tool", "Input Summary", "Output Summary", "Duration (ms)", "Timestamp"],
-            interactive=False,
-            wrap=True,
-        )
-        with gr.Row():
-            refresh_trace_btn = gr.Button("Refresh Trace", variant="secondary")
-            download_trace_btn = gr.Button("Download trace as JSON", variant="primary")
-        trace_download = gr.File(label="Download Trace")
+    session_banner = gr.HTML()
 
     fetch_apps_btn.click(
         fn=analyze_inbox_applications,
@@ -2080,7 +1995,7 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
                               outputs=[saved_default_state, default_text_box, default_save_status])
     demo.load(load_saved_default, inputs=[saved_default_state], outputs=[default_text_box])
     demo.load(_init_session, inputs=None,
-              outputs=[run_context_state, dev_tools, session_banner])
+              outputs=[run_context_state, session_banner])
     invite_mode_in.change(lambda m: gr.update(visible=(m == "custom")),
                           inputs=[invite_mode_in], outputs=[custom_invite_box])
 
@@ -2128,18 +2043,6 @@ with gr.Blocks(title="Smart HR Recruitment") as demo:
         outputs=[replies_action_status, replies_action_state],
     )
 
-    refresh_trace_btn.click(
-        fn=update_trace_table,
-        inputs=[trace_state, run_context_state],
-        outputs=[trace_table],
-    )
-    download_trace_btn.click(
-        fn=download_trace_json,
-        inputs=[trace_state, run_context_state],
-        outputs=[trace_download],
-    )
-    demo.load(update_trace_table, inputs=[trace_state, run_context_state],
-              outputs=[trace_table])
 
     gr.HTML('<div id="credit-footer">' + creator_credit_html() + '</div>')
 
