@@ -1552,7 +1552,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
         excluded_note += f' · {duplicate_count} repeat application(s) from the same sender ignored (latest kept)'
     review_count = sum(1 for c in candidates if c.get("needs_human_review"))
     hidden_count = sum(1 for c in candidates if c.get("hidden_text_suspected"))
-    budget_line = phase3_runner.summarize_budget(run_ctx)
     review_html = (
         f'<div class="status-line info">🧑‍⚖️ {review_count} candidate(s) need human review · '
         f'{hidden_count} hidden-text suspect(s).</div>'
@@ -1562,7 +1561,6 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
               f'“{_html.escape(requirements["title"])}” · required: {_html.escape(req_txt)} · '
               f'min. experience: {requirements["min_years"]} yr(s){excluded_note}</div>'
               '<div class="status-line info">Shortlist ≥ 75% · Review 45-74% · Reject &lt; 45%</div>'
-              f'<div class="status-line info">💸 {_html.escape(budget_line)}</div>'
               f'{review_html}')
     state = {"title": requirements["title"], "candidates": candidates}
     return (_stats_html_for(candidates), status, render_candidate_table(candidates),
