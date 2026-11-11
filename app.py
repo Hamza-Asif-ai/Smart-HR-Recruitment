@@ -117,12 +117,14 @@ def _identity_from_request(request):
 
     ``request is None`` only happens for direct Python calls/tests, never for a
     network request handled by Gradio, so it is treated as the local admin.
+    With ``HR_ALLOW_NO_AUTH=1`` every visitor is the local admin (public,
+    unauthenticated access) even when ``HR_USERS`` is configured.
     """
     if request is None:
         return auth_mod.UserRecord(username="system", role=Role.ADMIN,
                                    password_hash=""), None
     manager = auth_mod.get_auth_manager()
-    if not manager.enabled:
+    if config.HR_ALLOW_NO_AUTH or not manager.enabled:
         return auth_mod.UserRecord(username="local", role=Role.ADMIN,
                                    password_hash=""), manager
     username = str(getattr(request, "username", "") or "").strip().lower()
@@ -1559,7 +1561,7 @@ def analyze_inbox_applications(gmail_address, app_password, position, skills_tex
     status = (f'<div class="status-line ok">✅ Found {len(candidates)} relevant application(s), scored for '
               f'“{_html.escape(requirements["title"])}” · required: {_html.escape(req_txt)} · '
               f'min. experience: {requirements["min_years"]} yr(s){excluded_note}</div>'
-              f'<div class="status-line info">Shortlist ≥ {config.SHORTLIST_THRESHOLD:.0f}% · Review {config.REVIEW_THRESHOLD:.0f}-{config.SHORTLIST_THRESHOLD - 1:.0f}% · Reject &lt; {config.REVIEW_THRESHOLD:.0f}%</div>'
+              '<div class="status-line info">Shortlist ≥ 75% · Review 45-74% · Reject &lt; 45%</div>'
               f'<div class="status-line info">💸 {_html.escape(budget_line)}</div>'
               f'{review_html}')
     state = {"title": requirements["title"], "candidates": candidates}
