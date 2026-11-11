@@ -217,7 +217,7 @@ A wrong shortlist is the worst mistake a screening tool can make. The scorer is 
 | **Nice-to-have cap** | Nice-to-have matches contribute at most 10% |
 | **Smart experience maths** | Experience date ranges are merged; education dates are ignored |
 | **Confidence + disagreement** | When the LLM and regex extraction disagree beyond a threshold, the candidate is flagged for human review |
-| **Thresholds** | Shortlist ≥ 75, review ≥ 55 by default (both configurable, validated 0–100, review ≤ shortlist) |
+| **Thresholds** | Match ≥ 75% → shortlist · 45–75% → human review · below 45% → reject (both cut-offs configurable, validated 0–100, review ≤ shortlist) |
 | **Unreadable files** | A scanned PDF with no text layer is flagged for manual review instead of being ranked |
 
 Recommendations: `Strong match - shortlist` · `Possible match - review` · `Possible match - review (keyword stuffing suspected)` · `Weak match - likely reject` · `Unreadable resume - manual review`.
@@ -262,7 +262,7 @@ All settings are environment variables. Sensible defaults are built in, so the p
 | `HR_DATA_ROOT` | `./data` | Data directory (resumes, job descriptions, output) |
 | `HR_USERS` | — | **Required in containers.** UI accounts as `username:role:pbkdf2_hash` separated by `;` (or JSON). Generate a hash: `python -m src.auth --hash-password 'your-password'` |
 | `HR_ALLOW_NO_AUTH` | — | Set to `1` for **local development only** — disables login and binds to `127.0.0.1` |
-| `SHORTLIST_THRESHOLD` / `REVIEW_THRESHOLD` | `75` / `55` | Match % cut-offs (validated 0–100, review ≤ shortlist) |
+| `SHORTLIST_THRESHOLD` / `REVIEW_THRESHOLD` | `75` / `45` | Match % cut-offs: ≥ shortlist → shortlist, ≥ review → review, below review → reject (validated 0–100, review ≤ shortlist) |
 | `INTERVIEW_TIMEZONE` | `Asia/Kolkata` | IANA timezone for proposed slots (falls back to UTC if invalid) |
 | `BLIND_MODE` | off | `1` starts the app with blind screening enabled |
 
@@ -629,7 +629,7 @@ smart-hr-recruitment/
 - **Read-only inbox access.** The app reads applications and replies through Gmail but never sends from your mailbox; invitations go through Brevo.
 - **Brevo sender verification.** The sender email must be verified in Brevo before invitations can be delivered.
 - **Free-tier hosting.** Cold starts of about a minute, and a temporary disk that can reset saved workspaces and memory.
-- **Google sign-in for other users.** While the Google OAuth app is in testing mode, only listed test users can connect their Gmail.
+- **Google consent required.** Gmail and Calendar access works only after each user signs in with Google and grants the read-only scopes; the app never stores a Google password.
 - **Text-based scoring.** There is no video / interview assessment and no bias audit beyond the optional blind-screening mode.
 
 ---
@@ -645,7 +645,7 @@ smart-hr-recruitment/
 | App refuses to start | Set `HR_USERS`, or use `HR_ALLOW_NO_AUTH=1` for local development only |
 | "Google sign-in is disabled: set …" | Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`, `SESSION_SECRET` and `TOKEN_ENC_KEY` |
 | Gmail shows "not connected" | Click **Sign in with Google** first; the session cookie may have expired |
-| Google "access blocked" screen | Add your account as a test user in the Google Cloud OAuth consent screen |
+| Google "access blocked" screen | If your OAuth app is still in testing mode, add your account as a test user in the Google Cloud consent screen |
 | Startup error about `GEMINI_MODEL` | The model id is invalid or unavailable — fix it or remove the Gemini variables to use offline mode |
 | Banner says deterministic fallback | Missing key, invalid JSON or a budget limit was reached — results are still valid |
 | Emails fail with a 4xx from Brevo | Verify the sender email in Brevo and re-check the API key |
